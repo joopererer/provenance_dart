@@ -2,7 +2,7 @@ name: provenance_dart
 description: >-
   Pure Dart implementation of provenance-spec 0.1: read and write provenance
   XMP metadata in JPEG, PNG and WebP files and in .xmp sidecar files.
-version: 0.1.0
+version: 0.1.1
 repository: https://github.com/joopererer/provenance_dart
 
 environment:

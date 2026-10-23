@@ -92,6 +92,7 @@ export 'src/provenance_builder.dart'
         generateAssetId,
         maxDescriptionLength,
         truncateDescription;
+export 'src/spec_version.dart' show provenanceSpecVersion;
 export 'src/url_normalizer.dart' show normalizeUrl;
 export 'src/xmp_core.dart'
     show

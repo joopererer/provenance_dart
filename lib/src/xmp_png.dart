@@ -53,6 +53,12 @@ class PngChunk {
 }
 
 /// Scans the chunks of [bytes] up to and including IEND.
+///
+/// A final chunk whose declared length runs past the end of [bytes] is still
+/// reported, with [PngChunk.stop] clamped to the end of the buffer. Its
+/// [PngChunk.dataStop] is the end of the declared data, or the end of the
+/// buffer when the data itself is truncated: a truncated file normally has no
+/// CRC at all, so no bytes are deducted for one.
 List<PngChunk> scanPngChunks(Uint8List bytes) {
   if (bytes.length < 8 || !_hasPngSignature(bytes, 0)) {
     throw const FormatException('Not a PNG file');
@@ -71,7 +77,7 @@ List<PngChunk> scanPngChunks(Uint8List bytes) {
           start: offset,
           stop: bytes.length,
           dataStart: offset + 8,
-          dataStop: bytes.length - 4,
+          dataStop: _min(offset + 8 + length, bytes.length),
         ),
       );
       break;
@@ -94,7 +100,8 @@ List<PngChunk> scanPngChunks(Uint8List bytes) {
 /// Scans the chunks of an open file, reading only the 8-byte chunk headers.
 ///
 /// Chunk payloads are skipped with a seek, so neither pixel data nor large
-/// ancillary chunks are ever read into memory.
+/// ancillary chunks are ever read into memory. A final truncated chunk is
+/// reported the same way as in [scanPngChunks].
 Future<List<PngChunk>> scanPngChunksFromFile(RandomAccessFile file) async {
   final length = await file.length();
   await file.setPosition(0);
@@ -112,7 +119,18 @@ Future<List<PngChunk>> scanPngChunksFromFile(RandomAccessFile file) async {
     final dataLength = _readU32(head, 0);
     final type = String.fromCharCodes(head.sublist(4, 8));
     final stop = offset + 12 + dataLength;
-    if (stop > length) break;
+    if (stop > length) {
+      chunks.add(
+        PngChunk(
+          type: type,
+          start: offset,
+          stop: length,
+          dataStart: offset + 8,
+          dataStop: _min(offset + 8 + dataLength, length),
+        ),
+      );
+      break;
+    }
     chunks.add(
       PngChunk(
         type: type,
@@ -129,17 +147,22 @@ Future<List<PngChunk>> scanPngChunksFromFile(RandomAccessFile file) async {
 }
 
 /// Reads the provenance record from the XMP iTXt chunk of [bytes].
+///
+/// Returns `null` when there is no XMP chunk, when the package carries no
+/// provenance fields, or when a truncated file leaves the XML unparsable.
 XmpProvenance? readPngXmp(Uint8List bytes) {
   final text = readPngXmpText(bytes);
-  return text == null ? null : parseXmpXml(text);
+  return text == null ? null : _tryParseXmp(text);
 }
 
 /// Reads the provenance record from an open file.
 ///
-/// Only chunk headers and the XMP chunk payload are read.
+/// Only chunk headers and the XMP chunk payload are read. Returns `null` when
+/// the chunk is missing or truncated past the point where the XML can be
+/// parsed.
 Future<XmpProvenance?> readPngXmpFromFile(RandomAccessFile file) async {
   final text = await readPngXmpTextFromFile(file);
-  return text == null ? null : parseXmpXml(text);
+  return text == null ? null : _tryParseXmp(text);
 }
 
 /// Returns the raw XMP text of the XMP iTXt chunk, or `null`.
@@ -319,6 +342,18 @@ String? _decodeItxtData(Uint8List data) {
   if (compressionFlag != 0) return null;
   return utf8.decode(data.sublist(pos), allowMalformed: true);
 }
+
+/// Parses an embedded package, treating truncated or otherwise malformed XML
+/// as "no readable provenance" instead of throwing.
+XmpProvenance? _tryParseXmp(String text) {
+  try {
+    return parseXmpXml(text);
+  } on FormatException {
+    return null;
+  }
+}
+
+int _min(int a, int b) => a < b ? a : b;
 
 bool _hasPngSignature(Uint8List bytes, int offset) {
   for (var i = 0; i < _pngSignature.length; i++) {

@@ -1,3 +1,28 @@
+## 0.1.1
+
+### Fixed
+
+- **PNG truncated chunk (`scanPngChunks`).** A final chunk whose declared
+  length runs past the end of the data is now reported with
+  `dataStop = min(dataStart + length, bytes.length)`. The previous code always
+  subtracted four bytes for a CRC, but a truncated file usually has no trailing
+  CRC, so the last four bytes of the XML were deleted and `readPngXmp` threw
+  `FormatException` (reported by EasySave 0.1.0). `scanPngChunksFromFile` now
+  reports the same truncated chunk instead of silently dropping it.
+- **Truncated XMP is reported as "no readable provenance".** `readPngXmp` and
+  `readPngXmpFromFile` return `null` when a truncated package cannot be parsed,
+  instead of throwing an uncaught `FormatException`. JPEG and WebP were checked:
+  neither has a CRC-based length assumption, and their scanners already skip an
+  incomplete final segment or chunk, so their readers return `null`.
+
+### Added
+
+- `provenanceSpecVersion` (`'0.1.3'`), the spec release this package
+  implements, so other projects can reference it instead of hard-coding the
+  string. It is distinct from `prov:schema`, which stays `0.1`.
+- Tests for complete, CRC-less and half-written PNG chunks, plus truncated
+  JPEG and WebP segments.
+
 ## 0.1.0
 
 First release: a pure Dart implementation of provenance-spec 0.1.3, extracted

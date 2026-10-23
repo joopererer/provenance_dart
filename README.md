@@ -24,6 +24,9 @@ Flutter apps, in command-line tools and inside isolates.
 - **URL normalization** for `prov:sourceUrl` (SPEC §5).
 - **Tolerant reading**: unknown fields are ignored and preserved, missing
   fields do not fail a read (SPEC §1).
+- **Truncated files are safe**: a PNG chunk, JPEG segment or WebP chunk cut
+  short is reported as unreadable (`null`) instead of throwing; a PNG chunk
+  that only lacks its trailing CRC is still read.
 
 ## Getting started
 
@@ -31,7 +34,7 @@ Add the dependency:
 
 ```yaml
 dependencies:
-  provenance_dart: ^0.1.0
+  provenance_dart: ^0.1.1
 ```
 
 The spec is a git submodule at `spec/`, pinned to a release tag. The test
@@ -128,6 +131,7 @@ print(package.text); // only the rating changed
 | Area | Members |
 |---|---|
 | Orchestration | `MetadataService.readProvenance`, `readEmbeddedXmp`, `readSidecarXmpText`, `readEmbedded`, `readSidecar`, `detectFormat`, `hasC2pa`, `embedProvenance`, `writeSidecar`; `EmbedResult`, `EmbedErrorCode` |
+| Spec | `provenanceSpecVersion` (the implemented spec release, currently `0.1.3`) |
 | Model | `XmpProvenance`, `XmpFields` |
 | Building | `ProvenanceBuilder`, `generateAssetId`, `truncateDescription`, `maxDescriptionLength` |
 | XMP core | `parseXmpFields`, `parseXmpXml`, `mergeProvenance`, `mergeProvenanceXml`, `mergeXmpFields`, `buildXmpXml`, `writeProvenanceIntoPackage`, `updateXmpXml` |
@@ -214,7 +218,7 @@ run inside `Isolate.run` or a worker pool:
 
 ## Scope
 
-Implemented for 0.1.0:
+Implemented for 0.1.1:
 
 - JPEG, PNG and WebP embedded XMP, plus `.xmp` sidecar files.
 - SPEC §4.4 field-by-field merge, §4.6 write policy, §4.7 read and write
