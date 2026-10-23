@@ -1,0 +1,8 @@
+# Normalize line endings so the package is identical on every platform.
+* text=auto eol=lf
+
+# Test vectors are binary and must never be rewritten.
+spec/test-vectors/*.jpg binary
+spec/test-vectors/*.png binary
+spec/test-vectors/*.webp binary
+spec/test-vectors/*.mp4 binary
