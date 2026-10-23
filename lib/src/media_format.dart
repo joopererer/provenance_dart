@@ -3,6 +3,8 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'xmp_mp4.dart';
+
 /// A media container this package can read or write.
 enum MediaFormat {
   /// JPEG: `FF D8`, XMP lives in an APP1 segment (SPEC §4.1).
@@ -13,6 +15,10 @@ enum MediaFormat {
 
   /// WebP: `RIFF....WEBP`, XMP lives in an `XMP ` chunk (SPEC §4.1).
   webp,
+
+  /// MP4 or MOV: an ISO BMFF / QuickTime box chain, XMP lives in a top-level
+  /// `uuid` box (SPEC §4.1).
+  mp4,
 
   /// Any other format; provenance goes to a sidecar file (SPEC §4.1).
   other,
@@ -45,14 +51,16 @@ MediaFormat detectFormat(Uint8List bytes) {
       bytes[11] == 0x50) {
     return MediaFormat.webp;
   }
+  if (isMp4Header(bytes)) return MediaFormat.mp4;
   return MediaFormat.other;
 }
 
-/// Detects the container format of an open file from its first 12 bytes.
+/// Detects the container format of an open file from its first 16 bytes.
 ///
-/// Only the header is read, so this is safe for very large files.
+/// Only the header is read, so this is safe for very large files. Sixteen
+/// bytes are enough to see a 64-bit box header (`size == 1` plus `largesize`).
 Future<MediaFormat> detectFormatFromFile(RandomAccessFile file) async {
   await file.setPosition(0);
-  final header = await file.read(12);
+  final header = await file.read(16);
   return detectFormat(header);
 }

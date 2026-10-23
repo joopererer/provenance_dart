@@ -9,6 +9,7 @@ import 'dart:typed_data';
 
 import 'media_format.dart';
 import 'xmp_jpeg.dart';
+import 'xmp_mp4.dart';
 import 'xmp_png.dart';
 import 'xmp_webp.dart';
 
@@ -30,6 +31,8 @@ C2paStatus detectC2pa(Uint8List bytes, MediaFormat format) {
       return _detectPng(bytes);
     case MediaFormat.webp:
       return _detectWebp(bytes);
+    case MediaFormat.mp4:
+      return _detectMp4(bytes);
     case MediaFormat.other:
       return C2paStatus.none;
   }
@@ -64,6 +67,11 @@ Future<C2paStatus> detectC2paFromFile(
         if (chunk.fourCc == 'C2PA') return C2paStatus.detected;
       }
       return C2paStatus.none;
+    case MediaFormat.mp4:
+      for (final box in await scanMp4BoxesFromFile(file)) {
+        if (box.isC2pa) return C2paStatus.detected;
+      }
+      return C2paStatus.none;
     case MediaFormat.other:
       return C2paStatus.none;
   }
@@ -91,6 +99,13 @@ C2paStatus _detectPng(Uint8List bytes) {
 C2paStatus _detectWebp(Uint8List bytes) {
   for (final chunk in scanWebpChunks(bytes)) {
     if (chunk.fourCc == 'C2PA') return C2paStatus.detected;
+  }
+  return C2paStatus.none;
+}
+
+C2paStatus _detectMp4(Uint8List bytes) {
+  for (final box in scanMp4Boxes(bytes)) {
+    if (box.isC2pa) return C2paStatus.detected;
   }
   return C2paStatus.none;
 }

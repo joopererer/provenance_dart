@@ -8,6 +8,7 @@ import 'media_format.dart';
 import 'xmp_core.dart';
 import 'xmp_jpeg.dart';
 import 'xmp_model.dart';
+import 'xmp_mp4.dart';
 import 'xmp_png.dart';
 import 'xmp_sidecar.dart';
 import 'xmp_webp.dart';
@@ -108,6 +109,7 @@ class MetadataService {
         MediaFormat.jpeg => await readJpegXmpTextFromFile(handle),
         MediaFormat.png => await readPngXmpTextFromFile(handle),
         MediaFormat.webp => await readWebpXmpTextFromFile(handle),
+        MediaFormat.mp4 => await readMp4XmpTextFromFile(handle),
         MediaFormat.other => null,
       };
     } on FormatException {
@@ -184,11 +186,17 @@ class MetadataService {
   ///
   /// The file is replaced atomically: a failed write leaves the original bytes
   /// intact. Set [preserveModificationTime] to keep the file's timestamp.
+  ///
+  /// For MP4 / MOV files [mp4WriteMode] selects between replacing the file
+  /// ([Mp4WriteMode.rewrite], the default) and appending in place
+  /// ([Mp4WriteMode.inPlace]). The in-place mode avoids copying the file and is
+  /// meant for large videos in shared directories; it rolls back on failure.
   static Future<EmbedResult> embedProvenance({
     required String filePath,
     required XmpProvenance provenance,
     bool checkC2pa = true,
     bool preserveModificationTime = false,
+    Mp4WriteMode mp4WriteMode = Mp4WriteMode.rewrite,
   }) async {
     final file = File(filePath);
     if (!await file.exists()) {
@@ -230,6 +238,20 @@ class MetadataService {
             provenance,
             preserveModificationTime: preserveModificationTime,
           );
+        case MediaFormat.mp4:
+          if (mp4WriteMode == Mp4WriteMode.inPlace) {
+            await appendMp4XmpInPlace(
+              filePath,
+              provenance,
+              preserveModificationTime: preserveModificationTime,
+            );
+          } else {
+            await writeMp4XmpToFile(
+              filePath,
+              provenance,
+              preserveModificationTime: preserveModificationTime,
+            );
+          }
         case MediaFormat.other:
           return EmbedResult.failure(
             EmbedErrorCode.formatUnsupported,
@@ -238,6 +260,11 @@ class MetadataService {
       }
       return EmbedResult.embedded();
     } on ArgumentError catch (error) {
+      return EmbedResult.failure(
+        EmbedErrorCode.formatUnsupported,
+        'Write failed: ${error.message}',
+      );
+    } on Mp4WriteException catch (error) {
       return EmbedResult.failure(
         EmbedErrorCode.formatUnsupported,
         'Write failed: ${error.message}',

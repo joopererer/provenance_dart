@@ -1,8 +1,8 @@
 /// A pure Dart implementation of [provenance-spec](https://github.com/joopererer/provenance-spec) 0.1.
 ///
 /// Reads and writes provenance metadata — where a file came from, who made it,
-/// when it was captured — as XMP inside JPEG, PNG and WebP files, and in
-/// `.xmp` sidecar files.
+/// when it was captured — as XMP inside JPEG, PNG, WebP, MP4 and MOV files, and
+/// in `.xmp` sidecar files.
 ///
 /// ## Reading
 ///
@@ -41,12 +41,15 @@
 /// ## Memory use
 ///
 /// Reading looks only at the container header: a JPEG is scanned up to the
-/// start of scan, a PNG or WebP is walked chunk header by chunk header, and
-/// nothing but the XMP payload is ever loaded. Writing copies the rest of the
-/// file through a fixed 64 KiB buffer into a temporary file next to the target,
-/// flushes it, and renames it over the original, so the replacement is atomic
-/// and a failed write leaves the original untouched
-/// ([FileRewriteException]).
+/// start of scan, a PNG or WebP is walked chunk header by chunk header, an
+/// MP4 / MOV is walked top-level box header by top-level box header (seeking
+/// over `mdat`), and nothing but the XMP payload is ever loaded. Writing copies
+/// the rest of the file through a fixed 64 KiB buffer into a temporary file
+/// next to the target, flushes it, and renames it over the original, so the
+/// replacement is atomic and a failed write leaves the original untouched
+/// ([FileRewriteException]). MP4 / MOV can also be written in place with
+/// [appendMp4XmpInPlace], which creates no temporary file and rolls back on
+/// failure.
 ///
 /// ## Modification time
 ///
@@ -63,9 +66,10 @@
 ///   [truncateDescription], all `XmpProvenance` methods, [mergeProvenance],
 ///   [mergeProvenanceXml], [mergeXmpFields], [ProvenanceBuilder], and the
 ///   byte-level `readJpegXmp`, `writeJpegXmp`, `readPngXmp`, `writePngXmp`,
-///   `readWebpXmp`, `writeWebpXmp`, `detectC2pa`, [detectFormat],
-///   [parseXmpXml] and [buildXmpXml]. They take and return plain values and
-///   share no mutable state.
+///   `readWebpXmp`, `writeWebpXmp`, `readMp4Xmp`, `writeMp4Xmp`,
+///   `scanMp4Boxes`, `detectC2pa`, [detectFormat], [parseXmpXml] and
+///   [buildXmpXml]. They take and return plain values and share no mutable
+///   state.
 /// * **Safe in any isolate, but will perform file I/O there**:
 ///   [MetadataService] and the `...ToFile` / `...FromFile` functions,
 ///   `readSidecarXmp` and `writeSidecarXmp`. Each call opens and closes its own
@@ -130,6 +134,27 @@ export 'src/xmp_jpeg.dart'
         writeJpegXmpToFile,
         xmpApp1Header;
 export 'src/xmp_model.dart' show XmpFields, XmpProvenance;
+export 'src/xmp_mp4.dart'
+    show
+        Mp4Box,
+        Mp4BoxReader,
+        Mp4WriteErrorCode,
+        Mp4WriteException,
+        Mp4WriteMode,
+        appendMp4XmpInPlace,
+        isMp4Header,
+        maxMp4XmpBytes,
+        mp4C2paUuid,
+        mp4FreeBoxType,
+        mp4XmpUuid,
+        readMp4Xmp,
+        readMp4XmpFromFile,
+        readMp4XmpText,
+        readMp4XmpTextFromFile,
+        scanMp4Boxes,
+        scanMp4BoxesFromFile,
+        writeMp4Xmp,
+        writeMp4XmpToFile;
 export 'src/xmp_package.dart' show XmpPackage, escapeAttributeValue, escapeText;
 export 'src/xmp_png.dart'
     show
