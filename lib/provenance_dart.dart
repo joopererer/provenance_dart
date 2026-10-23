@@ -11,6 +11,12 @@
 /// print(provenance?.toJson());
 /// ```
 ///
+/// [MetadataService.readProvenance] merges the embedded metadata with the
+/// sidecar file field by field (SPEC §4.4): a field present on only one side is
+/// taken from that side; a field present on both sides with different values
+/// keeps the embedded value when it is a capture field, and the value of the
+/// newer `xmp:MetadataDate` when it is a user field.
+///
 /// ## Writing
 ///
 /// ```dart
@@ -37,8 +43,16 @@
 /// Reading looks only at the container header: a JPEG is scanned up to the
 /// start of scan, a PNG or WebP is walked chunk header by chunk header, and
 /// nothing but the XMP payload is ever loaded. Writing copies the rest of the
-/// file through a fixed 64 KiB buffer. Memory use is therefore independent of
-/// the file size.
+/// file through a fixed 64 KiB buffer into a temporary file next to the target,
+/// flushes it, and renames it over the original, so the replacement is atomic
+/// and a failed write leaves the original untouched
+/// ([FileRewriteException]).
+///
+/// ## Modification time
+///
+/// Every writer takes an optional `preserveModificationTime` argument,
+/// defaulting to `false`. Set it to keep the original timestamp instead of
+/// making the file look freshly modified.
 ///
 /// ## Isolates
 ///
@@ -46,11 +60,12 @@
 /// can run inside [Isolate.run] or a worker pool:
 ///
 /// * **Safe in any isolate**: [normalizeUrl], [generateAssetId],
-///   [truncateDescription], all `XmpProvenance` methods, [ProvenanceBuilder],
-///   and the byte-level `readJpegXmp`, `writeJpegXmp`, `readPngXmp`,
-///   `writePngXmp`, `readWebpXmp`, `writeWebpXmp`, `detectC2pa`,
-///   [detectFormat], [parseXmpXml] and [buildXmpXml]. They take and return
-///   plain values and share no mutable state.
+///   [truncateDescription], all `XmpProvenance` methods, [mergeProvenance],
+///   [mergeProvenanceXml], [mergeXmpFields], [ProvenanceBuilder], and the
+///   byte-level `readJpegXmp`, `writeJpegXmp`, `readPngXmp`, `writePngXmp`,
+///   `readWebpXmp`, `writeWebpXmp`, `detectC2pa`, [detectFormat],
+///   [parseXmpXml] and [buildXmpXml]. They take and return plain values and
+///   share no mutable state.
 /// * **Safe in any isolate, but will perform file I/O there**:
 ///   [MetadataService] and the `...ToFile` / `...FromFile` functions,
 ///   `readSidecarXmp` and `writeSidecarXmp`. Each call opens and closes its own
@@ -65,7 +80,8 @@ library;
 export 'src/c2pa_detector.dart' show C2paStatus, detectC2pa, detectC2paFromFile;
 export 'src/date_formatter.dart'
     show formatDateTimeUtc, formatDateTimeWithTimezone;
-export 'src/file_rewriter.dart' show FileRegion, rewriteFile;
+export 'src/file_rewriter.dart'
+    show FileRegion, FileRewriteException, rewriteFile, writeFileAtomically;
 export 'src/media_format.dart'
     show MediaFormat, detectFormat, detectFormatFromFile;
 export 'src/metadata_service.dart'
@@ -81,6 +97,8 @@ export 'src/xmp_core.dart'
     show
         buildXmpXml,
         mergeProvenance,
+        mergeProvenanceXml,
+        mergeXmpFields,
         parseXmpFields,
         parseXmpXml,
         updateXmpXml,

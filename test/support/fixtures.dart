@@ -124,6 +124,35 @@ XmpProvenance sampleProvenance({
   otherFields: otherFields,
 );
 
+/// Inserts an XMP APP1 segment carrying [xml] into [jpeg].
+///
+/// The segment is placed after the last APPn segment, which is where
+/// `writeJpegXmp` would put it. The XML is used verbatim, so a test can embed
+/// a package that holds no `prov` fields.
+Uint8List jpegWithRawXmp(Uint8List jpeg, String xml) {
+  final payload = <int>[...xmpApp1Header, ...xml.codeUnits];
+  final length = payload.length + 2;
+  final segment = <int>[
+    0xFF,
+    0xE1,
+    (length >> 8) & 0xFF,
+    length & 0xFF,
+    ...payload,
+  ];
+
+  var insertAt = 2;
+  for (final segment in scanJpegSegments(jpeg)) {
+    if (segment.marker < 0xE0 || segment.marker > 0xEF) continue;
+    insertAt = segment.stop;
+  }
+
+  return Uint8List.fromList([
+    ...jpeg.sublist(0, insertAt),
+    ...segment,
+    ...jpeg.sublist(insertAt),
+  ]);
+}
+
 /// Extracts the data of the RIFF chunk [fourCc] from [webp], or `null`.
 Uint8List? extractWebpChunk(Uint8List webp, String fourCc) {
   var offset = 12;

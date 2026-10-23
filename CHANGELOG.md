@@ -18,8 +18,13 @@ from EasySave's `feature/v1.7` metadata modules.
 - Header-only, asynchronous reads over `RandomAccessFile`: a JPEG is scanned up
   to the start of scan, a PNG or WebP is walked chunk header by chunk header.
   Memory use does not grow with the file size.
-- Streaming file writes through a fixed 64 KiB buffer and a temporary file, so
-  a failed write leaves the original untouched.
+- Streaming file writes through a fixed 64 KiB buffer and a temporary file in
+  the same directory, which is flushed and then renamed over the original, so
+  a failed write leaves the original bytes untouched and no temporary file
+  behind.
+- Optional `preserveModificationTime` on `rewriteFile`, `writeFileAtomically`,
+  the `...ToFile` writers, `writeSidecar`, `writeSidecarFor`,
+  `writeSidecarXmp` and `MetadataService.embedProvenance`.
 - C2PA content credential detection for JPEG, PNG and WebP (SPEC §4.3).
 - URL normalization for `prov:sourceUrl` (SPEC §5).
 - ISO 8601 date formatting that always carries a timezone (SPEC §8).
@@ -43,11 +48,23 @@ Passes all six requirements of SPEC §10, including every case of
 - **EXIF preservation.** Writing XMP inserts or replaces only the XMP APP1
   segment; EXIF and every other segment are copied byte for byte
   (SPEC §4.7 write requirement 4, added in spec 0.1.3).
+- **Field-by-field merge (SPEC §4.4).** A field present on only one side is
+  taken from that side, whether it is a capture or a user field. Only a real
+  conflict — both sides present with different values — uses the rule "capture
+  fields from the embedded metadata, user fields from the newer
+  `xmp:MetadataDate`". So a file whose embedded XMP carries no `prov` fields
+  still gets every capture field, and its `assetId`, from the sidecar.
+  `mergeProvenanceXml` / `mergeXmpFields` operate on the raw XML so this works
+  even when the embedded package has no provenance metadata at all.
 - **Fields are identified by namespace URI only.** EasySave also fell back to
   the local name, which could pick up a field from an unrelated namespace.
 - **Write policy follows SPEC §4.6.** Capture fields are only added when
   absent, never overwritten; `prov:assetId` is never changed; user fields are
   written when the caller supplies a value.
+- **Atomic writes.** EasySave overwrote the target file in place. Every write
+  here goes to a temporary file next to the target, is flushed, and is then
+  renamed over it; a failure at any point before the rename deletes the
+  temporary file and leaves the original bytes exactly as they were.
 - **UTC dates keep `Z`.** EasySave converted every date to local time; this
   package writes a UTC `DateTime` with `Z` and a local one with its offset.
 - **No application-specific rules.** The `xhs` → `xiaohongshu` platform map,

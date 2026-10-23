@@ -180,8 +180,13 @@ Uint8List writeWebpXmp(Uint8List bytes, XmpProvenance provenance) {
 /// Writes [provenance] into the XMP chunk of the file at [path].
 ///
 /// The file is rewritten through a temporary file, so a failure leaves the
-/// original untouched.
-Future<void> writeWebpXmpToFile(String path, XmpProvenance provenance) async {
+/// original untouched. Set [preserveModificationTime] to keep the original
+/// timestamp.
+Future<void> writeWebpXmpToFile(
+  String path,
+  XmpProvenance provenance, {
+  bool preserveModificationTime = false,
+}) async {
   final file = await File(path).open();
   late final List<FileRegion> regions;
   try {
@@ -218,7 +223,11 @@ Future<void> writeWebpXmpToFile(String path, XmpProvenance provenance) async {
     await file.close();
   }
 
-  await rewriteFile(path, regions);
+  await rewriteFile(
+    path,
+    regions,
+    preserveModificationTime: preserveModificationTime,
+  );
 }
 
 Future<(int, int)> _readDimensionsFromFile(

@@ -81,42 +81,135 @@ XmpProvenance? parseXmpXml(String xml) =>
 
 /// Merges the embedded and sidecar records of one file (SPEC §4.4).
 ///
-/// Capture fields come from [embedded]; user fields come from whichever side
-/// has the newer `xmp:MetadataDate`. When only one side exists it is returned
-/// unchanged, so the original date text survives.
+/// The merge is **per field**:
+///
+/// * a field that only one side carries is taken from that side, whether it is
+///   a capture field or a user field;
+/// * only when both sides carry a value and they differ does the conflict rule
+///   apply: capture fields take the embedded value, user fields take the value
+///   of the side with the newer `xmp:MetadataDate` (the embedded side wins a
+///   tie).
+///
+/// So a capture field missing from the embedded metadata is filled in from the
+/// sidecar instead of being dropped, and a user field that only the embedded
+/// metadata has survives a newer sidecar.
+///
+/// When only one side exists it is returned unchanged, so its original date
+/// text survives.
 XmpProvenance? mergeProvenance(
   XmpProvenance? embedded,
   XmpProvenance? sidecar,
 ) {
   if (embedded == null) return sidecar;
   if (sidecar == null) return embedded;
+  return _merge(
+    XmpFields(
+      values: {
+        for (final entry in embedded.toFields().entries)
+          if (entry.value != null) entry.key: entry.value,
+      },
+      otherFields: embedded.otherFields,
+    ),
+    XmpFields(
+      values: {
+        for (final entry in sidecar.toFields().entries)
+          if (entry.value != null) entry.key: entry.value,
+      },
+      otherFields: sidecar.otherFields,
+    ),
+  );
+}
 
-  final sidecarIsNewer = sidecar.metadataDate.isAfter(embedded.metadataDate);
-  final mergedOtherFields = <String, String>{
-    ...sidecar.otherFields,
-    ...embedded.otherFields,
-  };
+/// Merges the embedded and sidecar XMP packages of one file (SPEC §4.4).
+///
+/// Unlike [mergeProvenance], which needs a complete record on each side, this
+/// works on the raw XML, so it handles the common case of a file whose embedded
+/// XMP exists but carries no `prov` fields at all: every capture field, and the
+/// `assetId` above all, then comes from the sidecar while the embedded user
+/// fields are kept.
+///
+/// Either argument may be `null`. Unparseable XML is treated as absent.
+XmpProvenance? mergeProvenanceXml(String? embeddedXml, String? sidecarXml) {
+  final embedded = embeddedXml == null ? null : _tryParseFields(embeddedXml);
+  final sidecar = sidecarXml == null ? null : _tryParseFields(sidecarXml);
+  if (embedded == null) {
+    return sidecar == null ? null : XmpProvenance.fromFields(sidecar);
+  }
+  if (sidecar == null) return XmpProvenance.fromFields(embedded);
+  return _merge(embedded, sidecar);
+}
 
-  if (!sidecarIsNewer) {
-    return embedded.copyWith(
-      title: embedded.title ?? sidecar.title,
-      creators: embedded.creators ?? sidecar.creators,
-      description: embedded.description ?? sidecar.description,
-      subject: embedded.subject ?? sidecar.subject,
-      rating: embedded.rating ?? sidecar.rating,
-      otherFields: mergedOtherFields,
-    );
+/// Merges two raw field sets per field, as described on [mergeProvenance].
+///
+/// The result keeps `metadataDate` of the newer side, so a merge of the two
+/// sides reports when the winning user fields were last edited.
+XmpFields mergeXmpFields(XmpFields embedded, XmpFields sidecar) {
+  final sidecarIsNewer = _sidecarIsNewer(embedded, sidecar);
+  final values = <XmpField, Object?>{};
+
+  for (final field in XmpField.values) {
+    final embeddedValue = embedded.values[field];
+    final sidecarValue = sidecar.values[field];
+    final winner = switch ((embeddedValue, sidecarValue)) {
+      (null, null) => null,
+      (final value, null) => value,
+      (null, final value) => value,
+      (final value, final sidecarValue) when _sameValue(value, sidecarValue) =>
+        value,
+      // Both sides carry a value and they differ: the conflict rule applies.
+      (final value, final sidecarValue) => switch (field.fieldClass) {
+        XmpFieldClass.capture => value,
+        XmpFieldClass.system => sidecarIsNewer ? sidecarValue : value,
+        XmpFieldClass.user => sidecarIsNewer ? sidecarValue : value,
+      },
+    };
+    if (winner != null) values[field] = winner;
   }
 
-  return embedded.copyWith(
-    metadataDate: sidecar.metadataDate,
-    title: sidecar.title ?? embedded.title,
-    creators: sidecar.creators ?? embedded.creators,
-    description: sidecar.description ?? embedded.description,
-    subject: sidecar.subject ?? embedded.subject,
-    rating: sidecar.rating ?? embedded.rating,
-    otherFields: mergedOtherFields,
+  return XmpFields(
+    values: values,
+    // Foreign fields of both sides survive; the embedded side wins a clash,
+    // because the embedded metadata describes the file itself.
+    otherFields: {...sidecar.otherFields, ...embedded.otherFields},
   );
+}
+
+XmpProvenance? _merge(XmpFields embedded, XmpFields sidecar) =>
+    XmpProvenance.fromFields(mergeXmpFields(embedded, sidecar));
+
+XmpFields? _tryParseFields(String xml) {
+  try {
+    return parseXmpFields(xml);
+  } on FormatException {
+    return null;
+  }
+}
+
+/// Whether the sidecar's user fields win, that is whether it was edited later.
+///
+/// Falls back to `capturedAt` when a side has no `xmp:MetadataDate`; a tie and
+/// two unknown dates both keep the embedded fields.
+bool _sidecarIsNewer(XmpFields embedded, XmpFields sidecar) {
+  final sidecarDate = _metadataDateOf(sidecar);
+  if (sidecarDate == null) return false;
+  final embeddedDate = _metadataDateOf(embedded);
+  if (embeddedDate == null) return true;
+  return sidecarDate.isAfter(embeddedDate);
+}
+
+DateTime? _metadataDateOf(XmpFields fields) =>
+    DateTime.tryParse(fields.string(XmpField.metadataDate) ?? '') ??
+    DateTime.tryParse(fields.string(XmpField.capturedAt) ?? '');
+
+bool _sameValue(Object? a, Object? b) {
+  if (a is List && b is List) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i].toString() != b[i].toString()) return false;
+    }
+    return true;
+  }
+  return a == b || a?.toString() == b?.toString();
 }
 
 /// Builds a complete XMP package from [provenance].

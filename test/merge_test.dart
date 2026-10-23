@@ -1,7 +1,10 @@
 // Merging embedded metadata with a sidecar file (SPEC §4.4).
 //
-// Capture fields always come from the embedded metadata. User fields come
-// from whichever side has the newer `xmp:MetadataDate`.
+// A field present on only one side is taken from that side. Only a conflicting
+// field uses the rule: capture fields keep the embedded value, user fields take
+// the value of the newer `xmp:MetadataDate`.
+//
+// The exhaustive per-field coverage lives in field_merge_test.dart.
 
 import 'dart:io';
 

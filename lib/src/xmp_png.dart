@@ -188,8 +188,13 @@ Uint8List writePngXmp(Uint8List bytes, XmpProvenance provenance) {
 /// Writes [provenance] into the XMP iTXt chunk of the file at [path].
 ///
 /// The file is rewritten through a temporary file, so a failure leaves the
-/// original untouched.
-Future<void> writePngXmpToFile(String path, XmpProvenance provenance) async {
+/// original untouched. Set [preserveModificationTime] to keep the original
+/// timestamp.
+Future<void> writePngXmpToFile(
+  String path,
+  XmpProvenance provenance, {
+  bool preserveModificationTime = false,
+}) async {
   final file = await File(path).open();
   late final _WritePlan plan;
   try {
@@ -212,7 +217,9 @@ Future<void> writePngXmpToFile(String path, XmpProvenance provenance) async {
     await file.close();
   }
 
-  await rewriteFile(path, [FileRegion(plan.start, plan.stop, plan.chunk)]);
+  await rewriteFile(path, [
+    FileRegion(plan.start, plan.stop, plan.chunk),
+  ], preserveModificationTime: preserveModificationTime);
 }
 
 class _WritePlan {

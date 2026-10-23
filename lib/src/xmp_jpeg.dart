@@ -222,6 +222,22 @@ String? readJpegXmpText(Uint8List bytes) {
   return null;
 }
 
+/// Returns the raw XMP text of the first XMP APP1 segment of an open file.
+///
+/// Returns `null` when the file has no XMP segment. Only the XMP payload is
+/// read; the image data is never touched.
+Future<String?> readJpegXmpTextFromFile(RandomAccessFile file) async {
+  for (final segment in await scanJpegSegmentsFromFile(file)) {
+    if (segment.marker != 0xE1) continue;
+    if (!await _hasHeaderInFile(file, segment, xmpApp1Header)) continue;
+    final start = segment.payloadStart + xmpApp1Header.length;
+    await file.setPosition(start);
+    final payload = await file.read(segment.payloadStop - start);
+    return utf8.decode(payload, allowMalformed: true);
+  }
+  return null;
+}
+
 /// Writes [provenance] into the XMP APP1 segment of [bytes].
 ///
 /// An existing XMP segment is replaced in place; otherwise a new segment is
@@ -251,8 +267,13 @@ Uint8List writeJpegXmp(Uint8List bytes, XmpProvenance provenance) {
 /// Writes [provenance] into the XMP APP1 segment of the file at [path].
 ///
 /// The file is rewritten through a temporary file, so a failure leaves the
-/// original untouched. Only the header is read into memory.
-Future<void> writeJpegXmpToFile(String path, XmpProvenance provenance) async {
+/// original untouched. Only the header is read into memory. Set
+/// [preserveModificationTime] to keep the original timestamp.
+Future<void> writeJpegXmpToFile(
+  String path,
+  XmpProvenance provenance, {
+  bool preserveModificationTime = false,
+}) async {
   final file = await File(path).open();
   late final _WritePlan plan;
   try {
@@ -279,7 +300,9 @@ Future<void> writeJpegXmpToFile(String path, XmpProvenance provenance) async {
     await file.close();
   }
 
-  await rewriteFile(path, [FileRegion(plan.start, plan.stop, plan.segment)]);
+  await rewriteFile(path, [
+    FileRegion(plan.start, plan.stop, plan.segment),
+  ], preserveModificationTime: preserveModificationTime);
 }
 
 class _WritePlan {

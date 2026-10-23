@@ -1,5 +1,6 @@
 // Orchestration of format detection, C2PA checks and XMP read/write.
 
+import 'dart:convert';
 import 'dart:io';
 
 import 'c2pa_detector.dart';
@@ -78,29 +79,59 @@ class MetadataService {
   const MetadataService._();
 
   /// Reads the provenance record of [filePath], merging the embedded metadata
-  /// with the sidecar file (SPEC §4.4).
+  /// with the sidecar file per field (SPEC §4.4).
+  ///
+  /// A field present on only one side is taken from that side, so a file whose
+  /// embedded XMP has no `prov` fields still returns the `assetId` and source
+  /// fields of its sidecar. Only a field present on both sides with different
+  /// values is resolved by the conflict rule: capture fields keep the embedded
+  /// value, user fields take the newer `xmp:MetadataDate`.
   ///
   /// Returns `null` when neither source holds provenance metadata.
   static Future<XmpProvenance?> readProvenance(String filePath) async {
-    final embedded = await readEmbedded(filePath);
-    final sidecar = await readSidecar(filePath);
-    return mergeProvenance(embedded, sidecar);
+    final embeddedXml = await readEmbeddedXmp(filePath);
+    final sidecarXml = await readSidecarXmpText(filePath);
+    return mergeProvenanceXml(embeddedXml, sidecarXml);
   }
 
-  /// Reads only the metadata embedded in [filePath].
-  static Future<XmpProvenance?> readEmbedded(String filePath) async {
+  /// Reads the raw XMP text embedded in [filePath], or `null`.
+  ///
+  /// Only the header of the container is read, so this is safe on large files.
+  static Future<String?> readEmbeddedXmp(String filePath) async {
     final file = File(filePath);
     if (!await file.exists()) return null;
 
     final handle = await file.open();
     try {
       final format = await detectFormatFromFile(handle);
-      return await _readEmbedded(handle, format);
+      return switch (format) {
+        MediaFormat.jpeg => await readJpegXmpTextFromFile(handle),
+        MediaFormat.png => await readPngXmpTextFromFile(handle),
+        MediaFormat.webp => await readWebpXmpTextFromFile(handle),
+        MediaFormat.other => null,
+      };
     } on FormatException {
       return null;
     } finally {
       await handle.close();
     }
+  }
+
+  /// Reads the raw XMP text of the sidecar of [filePath], or `null`.
+  static Future<String?> readSidecarXmpText(String filePath) async {
+    final file = File(sidecarPathFor(filePath));
+    if (!await file.exists()) return null;
+    try {
+      return await file.readAsString(encoding: utf8);
+    } on FileSystemException {
+      return null;
+    }
+  }
+
+  /// Reads only the metadata embedded in [filePath].
+  static Future<XmpProvenance?> readEmbedded(String filePath) async {
+    final xml = await readEmbeddedXmp(filePath);
+    return xml == null ? null : parseXmpXml(xml);
   }
 
   /// Reads only the sidecar of [filePath].
@@ -150,10 +181,14 @@ class MetadataService {
   /// [EmbedResult.skippedC2pa] is returned; the caller must write a sidecar
   /// instead. When the container is not supported, [EmbedErrorCode
   /// .formatUnsupported] is returned and the caller should also use a sidecar.
+  ///
+  /// The file is replaced atomically: a failed write leaves the original bytes
+  /// intact. Set [preserveModificationTime] to keep the file's timestamp.
   static Future<EmbedResult> embedProvenance({
     required String filePath,
     required XmpProvenance provenance,
     bool checkC2pa = true,
+    bool preserveModificationTime = false,
   }) async {
     final file = File(filePath);
     if (!await file.exists()) {
@@ -178,11 +213,23 @@ class MetadataService {
 
       switch (format) {
         case MediaFormat.jpeg:
-          await writeJpegXmpToFile(filePath, provenance);
+          await writeJpegXmpToFile(
+            filePath,
+            provenance,
+            preserveModificationTime: preserveModificationTime,
+          );
         case MediaFormat.png:
-          await writePngXmpToFile(filePath, provenance);
+          await writePngXmpToFile(
+            filePath,
+            provenance,
+            preserveModificationTime: preserveModificationTime,
+          );
         case MediaFormat.webp:
-          await writeWebpXmpToFile(filePath, provenance);
+          await writeWebpXmpToFile(
+            filePath,
+            provenance,
+            preserveModificationTime: preserveModificationTime,
+          );
         case MediaFormat.other:
           return EmbedResult.failure(
             EmbedErrorCode.formatUnsupported,
@@ -204,22 +251,16 @@ class MetadataService {
   }
 
   /// Writes [provenance] to the sidecar of [filePath], creating it if needed.
-  static Future<void> writeSidecar(String filePath, XmpProvenance provenance) =>
-      writeSidecarFor(filePath, provenance);
-
-  static Future<XmpProvenance?> _readEmbedded(
-    RandomAccessFile handle,
-    MediaFormat format,
-  ) async {
-    switch (format) {
-      case MediaFormat.jpeg:
-        return readJpegXmpFromFile(handle);
-      case MediaFormat.png:
-        return readPngXmpFromFile(handle);
-      case MediaFormat.webp:
-        return readWebpXmpFromFile(handle);
-      case MediaFormat.other:
-        return null;
-    }
-  }
+  ///
+  /// Set [preserveModificationTime] to keep the sidecar's timestamp when it
+  /// already exists.
+  static Future<void> writeSidecar(
+    String filePath,
+    XmpProvenance provenance, {
+    bool preserveModificationTime = false,
+  }) => writeSidecarFor(
+    filePath,
+    provenance,
+    preserveModificationTime: preserveModificationTime,
+  );
 }

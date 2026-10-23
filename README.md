@@ -56,8 +56,18 @@ if (provenance != null) {
 }
 ```
 
-`readProvenance` merges the embedded metadata with the sidecar file. Use
-`readEmbedded` or `readSidecar` to read one side only.
+`readProvenance` merges the embedded metadata with the sidecar file field by
+field (SPEC §4.4):
+
+- a field present on only one side is taken from that side, whether it is a
+  capture field or a user field;
+- only when both sides disagree does the rule apply — capture fields keep the
+  embedded value, user fields take the value of the newer `xmp:MetadataDate`.
+
+So a photo whose embedded XMP has no `prov` fields at all still reports the
+`assetId` and the source fields of its sidecar, while keeping the title and
+rating written by an external editor. Use `readEmbedded` or `readSidecar` to
+read one side only, or `readEmbeddedXmp` / `readSidecarXmpText` for the raw XML.
 
 ### Writing
 
@@ -117,13 +127,13 @@ print(package.text); // only the rating changed
 
 | Area | Members |
 |---|---|
-| Orchestration | `MetadataService.readProvenance`, `readEmbedded`, `readSidecar`, `detectFormat`, `hasC2pa`, `embedProvenance`, `writeSidecar`; `EmbedResult`, `EmbedErrorCode` |
+| Orchestration | `MetadataService.readProvenance`, `readEmbeddedXmp`, `readSidecarXmpText`, `readEmbedded`, `readSidecar`, `detectFormat`, `hasC2pa`, `embedProvenance`, `writeSidecar`; `EmbedResult`, `EmbedErrorCode` |
 | Model | `XmpProvenance`, `XmpFields` |
 | Building | `ProvenanceBuilder`, `generateAssetId`, `truncateDescription`, `maxDescriptionLength` |
-| XMP core | `parseXmpFields`, `parseXmpXml`, `mergeProvenance`, `buildXmpXml`, `writeProvenanceIntoPackage`, `updateXmpXml` |
+| XMP core | `parseXmpFields`, `parseXmpXml`, `mergeProvenance`, `mergeProvenanceXml`, `mergeXmpFields`, `buildXmpXml`, `writeProvenanceIntoPackage`, `updateXmpXml` |
 | In-place editing | `XmpPackage`, `escapeAttributeValue`, `escapeText` |
 | Fields | `XmpField`, `XmpFieldClass`, `XmpValueKind`, namespace URI constants |
-| JPEG | `readJpegXmp`, `writeJpegXmp`, `readJpegXmpText`, `scanJpegSegments`, `readJpegXmpFromFile`, `scanJpegSegmentsFromFile`, `writeJpegXmpToFile`, `JpegSegment`, `xmpApp1Header`, `exifApp1Header`, `maxJpegXmpBytes` |
+| JPEG | `readJpegXmp`, `writeJpegXmp`, `readJpegXmpText`, `scanJpegSegments`, `readJpegXmpFromFile`, `readJpegXmpTextFromFile`, `scanJpegSegmentsFromFile`, `writeJpegXmpToFile`, `JpegSegment`, `xmpApp1Header`, `exifApp1Header`, `maxJpegXmpBytes` |
 | PNG | `readPngXmp`, `writePngXmp`, `readPngXmpText`, `readPngXmpTextFromFile`, `scanPngChunks`, `scanPngChunksFromFile`, `readPngXmpFromFile`, `writePngXmpToFile`, `PngChunk`, `pngXmpKeyword`, `crc32` |
 | WebP | `readWebpXmp`, `writeWebpXmp`, `readWebpXmpText`, `readWebpXmpTextFromFile`, `scanWebpChunks`, `scanWebpChunksFromFile`, `readWebpXmpFromFile`, `writeWebpXmpToFile`, `WebpChunk`, `webpXmpFourCc`, `webpXmpFlag` |
 | Sidecar | `sidecarPathFor`, `readSidecarFor`, `readSidecarXmp`, `writeSidecarFor`, `writeSidecarXmp` |
@@ -131,7 +141,7 @@ print(package.text); // only the rating changed
 | Format | `detectFormat`, `detectFormatFromFile`, `MediaFormat` |
 | URLs | `normalizeUrl` |
 | Dates | `formatDateTimeWithTimezone`, `formatDateTimeUtc` |
-| Files | `rewriteFile`, `FileRegion` |
+| Files | `rewriteFile`, `writeFileAtomically`, `FileRegion`, `FileRewriteException` |
 | XML | `parseXmlTree`, `XmlElementNode`, `XmlAttr`, `XmlTextNode` |
 
 ## Memory use
@@ -139,11 +149,47 @@ print(package.text); // only the rating changed
 Reading looks only at the container header: a JPEG is scanned up to the start
 of scan, a PNG or WebP is walked chunk header by chunk header, and nothing but
 the XMP payload is ever loaded. Writing copies the rest of the file through a
-fixed 64 KiB buffer to a temporary file and then renames it over the original,
-so a failed write leaves the file untouched.
+fixed 64 KiB buffer into a temporary file next to the target, flushes it, and
+renames it over the original, so the replacement is atomic and a failed write
+leaves the original bytes untouched and no temporary file behind.
 
 Memory use is therefore independent of the file size. The test suite verifies
 this with 1 GiB sparse files.
+
+## Modification time
+
+Every writer takes an optional `preserveModificationTime` flag, defaulting to
+`false`, so a metadata edit normally looks like a fresh modification:
+
+```dart
+await MetadataService.embedProvenance(
+  filePath: 'photo.jpg',
+  provenance: provenance,
+  preserveModificationTime: true, // keep the photo's original timestamp
+);
+```
+
+The same flag exists on `MetadataService.writeSidecar`, `writeSidecarFor`,
+`writeSidecarXmp`, `writeJpegXmpToFile`, `writePngXmpToFile`,
+`writeWebpXmpToFile`, `rewriteFile` and `writeFileAtomically`.
+
+## Known behaviour
+
+- **Only `stat` timestamps and bytes survive a write.** Because a write replaces
+  the file through a same-directory temporary file plus a rename, everything
+  that lives beside the file data is dropped: NTFS alternate data streams
+  (including `Zone.Identifier`), macOS extended attributes (including
+  `com.apple.metadata:kMDItemWhereFroms`), the file creation time, and any
+  hard-link identity. Callers that need those source hints (SPEC §4.5) must
+  read them **before** writing.
+- **A file locked by another process on Windows.** Windows refuses the rename
+  while another process holds the file open without sharing, so the write
+  throws `FileRewriteException`. The original file is untouched and no
+  temporary file is left behind; the caller should retry later.
+- **A crash can leave `.<file name>.provenance-tmp` behind.** The file only ever
+  holds a partially written copy and is never the original. Callers that scan a
+  directory should ignore that suffix; the next write to the same target
+  replaces it.
 
 ## Isolates
 
@@ -151,11 +197,12 @@ Everything in this library is pure Dart with no platform channels, so it can
 run inside `Isolate.run` or a worker pool:
 
 - **Safe in any isolate**: `normalizeUrl`, `generateAssetId`,
-  `truncateDescription`, all `XmpProvenance` methods, `ProvenanceBuilder`, and
-  the byte-level `readJpegXmp`, `writeJpegXmp`, `readPngXmp`, `writePngXmp`,
-  `readWebpXmp`, `writeWebpXmp`, `detectC2pa`, `detectFormat`, `parseXmpXml`
-  and `buildXmpXml`. They take and return plain values and share no mutable
-  state.
+  `truncateDescription`, all `XmpProvenance` and `XmpFields` methods,
+  `ProvenanceBuilder`, `mergeProvenance`, `mergeProvenanceXml`,
+  `mergeXmpFields`, and the byte-level `readJpegXmp`, `writeJpegXmp`,
+  `readPngXmp`, `writePngXmp`, `readWebpXmp`, `writeWebpXmp`, `detectC2pa`,
+  `detectFormat`, `parseXmpXml` and `buildXmpXml`. They take and return plain
+  values and share no mutable state.
 - **Safe in any isolate, but will perform file I/O there**: `MetadataService`
   and the `...ToFile` / `...FromFile` functions, `readSidecarXmp` and
   `writeSidecarXmp`. Each call opens and closes its own handle; nothing is
@@ -170,7 +217,10 @@ run inside `Isolate.run` or a worker pool:
 Implemented for 0.1.0:
 
 - JPEG, PNG and WebP embedded XMP, plus `.xmp` sidecar files.
-- SPEC §4.4 merge, §4.6 write policy, §4.7 read and write requirements.
+- SPEC §4.4 field-by-field merge, §4.6 write policy, §4.7 read and write
+  requirements.
+- Atomic writes: temporary file in the same directory, flushed, then renamed;
+  a failure leaves the original bytes untouched and cleans up.
 - SPEC §10 conformance, including all `spec/test-vectors/` cases.
 
 Not implemented (deferred to 0.2):

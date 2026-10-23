@@ -3,6 +3,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'file_rewriter.dart';
 import 'xmp_core.dart';
 import 'xmp_model.dart';
 
@@ -30,16 +31,31 @@ Future<XmpProvenance?> readSidecarXmp(File file) async {
 }
 
 /// Writes [provenance] to the sidecar of [mediaPath].
-Future<void> writeSidecarFor(String mediaPath, XmpProvenance provenance) =>
-    writeSidecarXmp(File(sidecarPathFor(mediaPath)), provenance);
+///
+/// Set [preserveModificationTime] to keep the sidecar's timestamp when it
+/// already exists.
+Future<void> writeSidecarFor(
+  String mediaPath,
+  XmpProvenance provenance, {
+  bool preserveModificationTime = false,
+}) => writeSidecarXmp(
+  File(sidecarPathFor(mediaPath)),
+  provenance,
+  preserveModificationTime: preserveModificationTime,
+);
 
 /// Writes [provenance] to [file].
 ///
 /// When the sidecar already exists its XML is edited in place, so foreign
 /// fields and formatting survive (SPEC §4.7 write requirement 1). A new file
 /// is created only when there is none. The file is written as UTF-8 without a
-/// byte order mark (SPEC §4.2).
-Future<void> writeSidecarXmp(File file, XmpProvenance provenance) async {
+/// byte order mark (SPEC §4.2), through a temporary file, so a failed write
+/// leaves an existing sidecar untouched.
+Future<void> writeSidecarXmp(
+  File file,
+  XmpProvenance provenance, {
+  bool preserveModificationTime = false,
+}) async {
   String xml;
   if (await file.exists()) {
     final existing = await file.readAsString(encoding: utf8);
@@ -47,5 +63,9 @@ Future<void> writeSidecarXmp(File file, XmpProvenance provenance) async {
   } else {
     xml = buildXmpXml(provenance);
   }
-  await file.writeAsString(xml, encoding: utf8, flush: true);
+  await writeFileAtomically(
+    file.path,
+    utf8.encode(xml),
+    preserveModificationTime: preserveModificationTime,
+  );
 }
