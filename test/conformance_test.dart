@@ -1,4 +1,4 @@
-// Conformance with provenance-spec 0.1.4 (SPEC §10).
+// Conformance with provenance-spec 0.1.5 (SPEC §10).
 //
 // The six requirements of §10:
 //   1. every read case of `test-vectors/` matches its `*.expected.json`;

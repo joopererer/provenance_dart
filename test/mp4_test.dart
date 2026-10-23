@@ -1,4 +1,4 @@
-// MP4 / MOV XMP support against provenance-spec 0.1.4 (SPEC §4.1, §4.3, §4.7).
+// MP4 / MOV XMP support against provenance-spec 0.1.5 (SPEC §4.1, §4.3, §4.7).
 //
 // Reading walks the top-level box chain only; writing appends one new XMP
 // `uuid` box at the end of the file and retires the old ones by renaming their
@@ -14,6 +14,7 @@ import 'package:provenance_dart/provenance_dart.dart';
 import 'package:provenance_dart/src/xmp_mp4.dart' as internal;
 import 'package:test/test.dart';
 
+import 'support/fixtures.dart';
 import 'support/vectors.dart';
 
 /// The MP4 / MOV read cases of `spec/test-vectors/`.
@@ -25,6 +26,7 @@ const List<String> _videoVectors = [
   'mov-no-xmp.mov',
   'mov-xmp-uuid.mov',
   'mp4-64bit-box.mp4',
+  'mp4-interrupted-append.mp4',
   'mp4-mdat-uuid-noise.mp4',
   'mp4-multiple-xmp.mp4',
   'mp4-no-xmp.mp4',
@@ -39,29 +41,17 @@ final List<String> _embeddedVectors = _videoVectors
     .where((name) => name != 'local-video.mp4')
     .toList(growable: false);
 
-/// Vectors whose last top-level box runs past the end of the file.
-const List<String> _truncatedVectors = [
-  'mp4-truncated-mdat.mp4',
-  'mp4-truncated-xmp.mp4',
-];
+/// Vectors whose last top-level box runs past the end of the file and is not a
+/// recoverable XMP box, so a writer must refuse them.
+const List<String> _truncatedVectors = ['mp4-truncated-mdat.mp4'];
 
-/// Vectors whose box chain ends before the end of the file.
+/// The writable vectors: every read case a writer accepts.
 ///
-/// `mp4-mdat-uuid-noise.mp4` grew by two bytes when the generator overwrote 16
-/// bytes of `mdat` with a longer string, so its `mdat` size field no longer
-/// reaches EOF. A box appended after those two bytes would be unreachable for
-/// any conformant reader, so a writer must refuse it.
-const List<String> _trailingByteVectors = ['mp4-mdat-uuid-noise.mp4'];
-
-/// Every vector a writer must refuse.
-const List<String> _refusedVectors = [
-  ..._truncatedVectors,
-  ..._trailingByteVectors,
-];
-
-/// The writable vectors: every read case whose boxes end exactly at EOF.
+/// `mp4-interrupted-append.mp4` and `mp4-truncated-xmp.mp4` end with a
+/// half-written XMP box; SPEC §4.7 allows truncating it away and writing
+/// normally.
 final List<String> _writableVectors = _videoVectors
-    .where((name) => !_refusedVectors.contains(name))
+    .where((name) => !_truncatedVectors.contains(name))
     .toList(growable: false);
 
 /// A foreign field that a write must keep (SPEC §4.7).
@@ -120,14 +110,19 @@ void _expectWriteResult({
   final before = scanMp4Boxes(original);
   final after = scanMp4Boxes(written);
 
+  // An interrupted append leaves an incomplete XMP box at the end; the writer
+  // is allowed to drop it, so it is not part of the comparison.
+  final recoverable = before.last.isTruncated && before.last.isXmp;
+  final stable = recoverable ? before.sublist(0, before.length - 1) : before;
+
   expect(
     after.length,
-    before.length + 1,
+    stable.length + 1,
     reason: '$label: exactly one box was added',
   );
 
-  for (var i = 0; i < before.length; i++) {
-    final a = before[i];
+  for (var i = 0; i < stable.length; i++) {
+    final a = stable[i];
     final b = after[i];
     if (a.isXmp) {
       expect(b.type, mp4FreeBoxType, reason: '$label: box $i retired');
@@ -172,6 +167,40 @@ Future<File> _copyVector(Directory dir, String name) async {
   final target = File(p.join(dir.path, name));
   await target.writeAsBytes(await readVector(name), flush: true);
   return target;
+}
+
+/// A complete XMP `uuid` box for [provenance], built the way the writer does.
+List<int> _encodeXmpBoxForTest(XmpProvenance provenance) {
+  final payload = utf8.encode(buildXmpXml(provenance));
+  final size = 8 + mp4XmpUuid.length + payload.length;
+  return <int>[..._u32(size), ..._uuidType, ...mp4XmpUuid, ...payload];
+}
+
+/// Marks [file] read-only for the current user.
+Future<void> _makeReadOnly(File file) async {
+  if (Platform.isWindows) {
+    await Process.run('attrib', ['+R', file.path]);
+  } else {
+    await Process.run('chmod', ['444', file.path]);
+  }
+}
+
+/// Makes [dir] non-writable, so creating a temporary file inside it fails.
+///
+/// On Windows the read-only attribute of a directory does not prevent file
+/// creation, so the read-only file itself is what blocks the rename there.
+Future<void> _makeDirReadOnly(Directory dir) async {
+  if (Platform.isWindows) return;
+  await Process.run('chmod', ['555', dir.path]);
+}
+
+/// Restores write permission on [dir] and everything inside it.
+Future<void> _restorePermissions(Directory dir) async {
+  if (Platform.isWindows) {
+    await Process.run('attrib', ['-R', '${dir.path}\\*', '/S']);
+    return;
+  }
+  await Process.run('chmod', ['-R', 'u+rwX', dir.path]);
 }
 
 Future<void> _write(File file, XmpProvenance provenance, Mp4WriteMode mode) {
@@ -385,16 +414,28 @@ void main() {
 
     test('UUID bytes inside mdat are not a top-level box', () async {
       final bytes = await readVector('mp4-mdat-uuid-noise.mp4');
+      final boxes = scanMp4Boxes(bytes);
+
+      // The vector carries a fake XMP packet inside mdat and a real top-level
+      // XMP box at the end. Only the top-level one may be read.
+      expect(boxes.map((box) => box.type).toList(), [
+        'ftyp',
+        'moov',
+        'free',
+        'mdat',
+        'uuid',
+      ]);
+      expect(boxes.where((box) => box.isXmp).length, 1);
+
+      final expected = loadExpected('mp4-mdat-uuid-noise.mp4');
+      final provenance = readMp4Xmp(bytes);
+      expect(provenance, isNotNull);
+      expectJsonMatches(provenance!.toJson(), expected, 'noise');
       expect(
-        bytes.length,
-        greaterThan(0),
-        reason: 'the vector contains the XMP UUID inside mdat',
+        provenance.platform,
+        'web',
+        reason: 'the top-level block wins, not the fake one in mdat',
       );
-      expect(
-        scanMp4Boxes(bytes).map((box) => box.type),
-        isNot(contains('uuid')),
-      );
-      expect(readMp4XmpText(bytes), isNull);
     });
 
     test('the last well-formed XMP box wins', () async {
@@ -567,6 +608,231 @@ void main() {
     });
   });
 
+  group('interrupted append (SPEC §4.7)', () {
+    late Directory dir;
+    setUp(() async {
+      dir = await Directory.systemTemp.createTemp('provenance_mp4_interrupted');
+    });
+    tearDown(() async {
+      internal.debugFailInPlaceAt = null;
+      await dir.delete(recursive: true);
+    });
+
+    test('the complete old block is still readable', () async {
+      final bytes = await readVector('mp4-interrupted-append.mp4');
+      final boxes = scanMp4Boxes(bytes);
+
+      expect(boxes.last.isTruncated, isTrue, reason: 'half-written new block');
+      expect(boxes.last.isXmp, isTrue, reason: 'it is recognisable as XMP');
+      expect(boxes[boxes.length - 2].isXmp, isTrue, reason: 'old block');
+
+      final expected = loadExpected('mp4-interrupted-append.mp4');
+      final provenance = readMp4Xmp(bytes);
+      expect(provenance, isNotNull, reason: 'the old block is still valid');
+      expectJsonMatches(provenance!.toJson(), expected, 'interrupted');
+
+      final path = vectorFile('mp4-interrupted-append.mp4').path;
+      expect(
+        await MetadataService.readEmbeddedXmp(path),
+        isNotNull,
+        reason: 'the file reader agrees',
+      );
+    });
+
+    for (final mode in Mp4WriteMode.values) {
+      test('writing over it succeeds via ${mode.name}', () async {
+        final original = await readVector('mp4-interrupted-append.mp4');
+        final file = await _copyVector(dir, 'mp4-interrupted-append.mp4');
+
+        await _write(file, _provenance(), mode);
+        final written = await file.readAsBytes();
+
+        _expectWriteResult(
+          original: original,
+          written: written,
+          label: 'interrupted/${mode.name}',
+        );
+
+        // The media data is untouched.
+        final before = scanMp4Boxes(original);
+        final after = scanMp4Boxes(written);
+        final mdatBefore = before.firstWhere((box) => box.type == 'mdat');
+        final mdatAfter = after.firstWhere((box) => box.type == 'mdat');
+        expect(
+          _sameRange(original, written, mdatBefore.start, mdatBefore.stop),
+          isTrue,
+          reason: '${mode.name}: mdat unchanged',
+        );
+        expect(
+          mdatAfter.stop - mdatAfter.start,
+          mdatBefore.stop - mdatBefore.start,
+        );
+
+        // The old complete block was retired, not deleted.
+        expect(
+          after.where((box) => box.type == mp4FreeBoxType).length,
+          greaterThanOrEqualTo(1),
+          reason: '${mode.name}: old XMP box became free',
+        );
+        expect(readMp4Xmp(written), isNotNull, reason: mode.name);
+      });
+    }
+
+    test('a half-written block from a killed process is recovered', () async {
+      final original = await readVector('mp4-no-xmp.mp4');
+      final file = await _copyVector(dir, 'mp4-no-xmp.mp4');
+
+      // Simulate a process killed mid-append: write half a box and stop, with
+      // no rollback and no type patch.
+      final half = _encodeXmpBoxForTest(_provenance());
+      final handle = await file.open(mode: FileMode.append);
+      try {
+        await handle.setPosition(original.length);
+        await handle.writeFrom(half.sublist(0, half.length ~/ 2));
+        await handle.flush();
+      } finally {
+        await handle.close();
+      }
+
+      final damaged = await file.readAsBytes();
+      expect(damaged.length, greaterThan(original.length));
+      expect(scanMp4Boxes(damaged).last.isTruncated, isTrue);
+      expect(readMp4Xmp(damaged), isNull, reason: 'nothing readable yet');
+
+      await appendMp4XmpInPlace(file.path, _provenance());
+      final repaired = await file.readAsBytes();
+
+      final boxes = scanMp4Boxes(repaired);
+      expect(boxes.where((box) => box.isXmp).length, 1);
+      expect(boxes.last.isXmp, isTrue);
+      expect(boxes.last.stop, repaired.length);
+      expect(readMp4Xmp(repaired), isNotNull);
+
+      // The media data is byte-identical.
+      final mdat = scanMp4Boxes(original).firstWhere((b) => b.type == 'mdat');
+      expect(_sameRange(original, repaired, mdat.start, mdat.stop), isTrue);
+    });
+
+    test('a truncated non-XMP box is still refused', () async {
+      final file = await _copyVector(dir, 'mp4-truncated-mdat.mp4');
+      final before = await file.readAsBytes();
+      await expectLater(
+        appendMp4XmpInPlace(file.path, _provenance()),
+        throwsA(
+          isA<Mp4WriteException>().having(
+            (error) => error.code,
+            'code',
+            Mp4WriteErrorCode.truncatedFile,
+          ),
+        ),
+      );
+      expect(await file.readAsBytes(), before);
+    });
+  });
+
+  group('permission errors', () {
+    late Directory dir;
+    setUp(() async {
+      dir = await Directory.systemTemp.createTemp('provenance_mp4_perm');
+    });
+    tearDown(() async {
+      await _restorePermissions(dir);
+      await dir.delete(recursive: true);
+    });
+
+    for (final mode in Mp4WriteMode.values) {
+      test('a read-only MP4 reports writeFailed via ${mode.name}', () async {
+        final file = await _copyVector(dir, 'mp4-no-xmp.mp4');
+        final before = await file.readAsBytes();
+        await _makeReadOnly(file);
+        if (mode == Mp4WriteMode.rewrite) {
+          // On POSIX a read-only file can still be replaced by a rename, so
+          // the directory has to be read-only too.
+          await _makeDirReadOnly(dir);
+        }
+
+        final result = await MetadataService.embedProvenance(
+          filePath: file.path,
+          provenance: _provenance(),
+          mp4WriteMode: mode,
+        );
+
+        expect(result.success, isFalse, reason: mode.name);
+        expect(
+          result.errorCode,
+          EmbedErrorCode.writeFailed,
+          reason: '${mode.name}: a permission error is not a format problem',
+        );
+        expect(result.isFormatError, isFalse, reason: mode.name);
+        expect(result.cause, isNotNull, reason: 'the original error is kept');
+        expect(
+          result.cause,
+          anyOf(isA<FileSystemException>(), isA<FileRewriteException>()),
+          reason: '${mode.name}: ${result.cause}',
+        );
+        expect(
+          result.errorMessage,
+          contains('Write failed'),
+          reason: mode.name,
+        );
+
+        await _restorePermissions(dir);
+        expect(await file.readAsBytes(), before, reason: 'file untouched');
+      });
+    }
+
+    test('a read-only JPEG reports writeFailed', () async {
+      final file = File(p.join(dir.path, 'photo.jpg'));
+      await file.writeAsBytes(minimalJpeg(), flush: true);
+      await _makeReadOnly(file);
+      await _makeDirReadOnly(dir);
+
+      final result = await MetadataService.embedProvenance(
+        filePath: file.path,
+        provenance: _provenance(),
+      );
+      expect(result.errorCode, EmbedErrorCode.writeFailed);
+      expect(
+        result.cause,
+        anyOf(isA<FileSystemException>(), isA<FileRewriteException>()),
+      );
+    });
+
+    test('a read-only PNG reports writeFailed', () async {
+      final file = File(p.join(dir.path, 'image.png'));
+      await file.writeAsBytes(minimalPng(), flush: true);
+      await _makeReadOnly(file);
+      await _makeDirReadOnly(dir);
+
+      final result = await MetadataService.embedProvenance(
+        filePath: file.path,
+        provenance: _provenance(),
+      );
+      expect(result.errorCode, EmbedErrorCode.writeFailed);
+      expect(
+        result.cause,
+        anyOf(isA<FileSystemException>(), isA<FileRewriteException>()),
+      );
+    });
+
+    test('a read-only WebP reports writeFailed', () async {
+      final file = File(p.join(dir.path, 'image.webp'));
+      await file.writeAsBytes(minimalWebpVp8(), flush: true);
+      await _makeReadOnly(file);
+      await _makeDirReadOnly(dir);
+
+      final result = await MetadataService.embedProvenance(
+        filePath: file.path,
+        provenance: _provenance(),
+      );
+      expect(result.errorCode, EmbedErrorCode.writeFailed);
+      expect(
+        result.cause,
+        anyOf(isA<FileSystemException>(), isA<FileRewriteException>()),
+      );
+    });
+  });
+
   group('write refusals', () {
     late Directory dir;
     setUp(() async {
@@ -590,7 +856,7 @@ void main() {
       );
     });
 
-    for (final name in _refusedVectors) {
+    for (final name in _truncatedVectors) {
       for (final mode in Mp4WriteMode.values) {
         test('$name is refused via ${mode.name}', () async {
           final file = await _copyVector(dir, name);
@@ -646,7 +912,11 @@ void main() {
     });
 
     for (final point in internal.Mp4WriteFailurePoint.values) {
-      for (final name in ['mp4-xmp-uuid.mp4', 'mp4-size-zero-mdat.mp4']) {
+      for (final name in [
+        'mp4-xmp-uuid.mp4',
+        'mp4-size-zero-mdat.mp4',
+        'mp4-interrupted-append.mp4',
+      ]) {
         test('$name rolls back when failing ${point.name}', () async {
           final file = await _copyVector(dir, name);
           final before = await file.readAsBytes();

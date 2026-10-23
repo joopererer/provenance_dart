@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'c2pa_detector.dart';
+import 'file_rewriter.dart';
 import 'media_format.dart';
 import 'xmp_core.dart';
 import 'xmp_jpeg.dart';
@@ -38,7 +39,12 @@ enum EmbedErrorCode {
 /// untouched and the caller should write a sidecar instead.
 class EmbedResult {
   /// Creates a result.
-  const EmbedResult({required this.success, this.errorCode, this.errorMessage});
+  const EmbedResult({
+    required this.success,
+    this.errorCode,
+    this.errorMessage,
+    this.cause,
+  });
 
   /// Whether the operation completed without an error.
   final bool success;
@@ -48,6 +54,21 @@ class EmbedResult {
 
   /// A human readable message, for logging.
   final String? errorMessage;
+
+  /// The original exception, when the failure came from the file system.
+  ///
+  /// A caller can inspect it to tell "Permission denied" from a full disk:
+  ///
+  /// ```dart
+  /// if (result.errorCode == EmbedErrorCode.writeFailed) {
+  ///   final cause = result.cause;
+  ///   if (cause is FileSystemException) print(cause.osError?.message);
+  /// }
+  /// ```
+  ///
+  /// It is `null` for a C2PA skip and for a structural refusal, where
+  /// [errorMessage] already says everything.
+  final Object? cause;
 
   /// A successful embed.
   factory EmbedResult.embedded() => const EmbedResult(success: true);
@@ -60,8 +81,16 @@ class EmbedResult {
   );
 
   /// A failure.
-  factory EmbedResult.failure(EmbedErrorCode code, String message) =>
-      EmbedResult(success: false, errorCode: code, errorMessage: message);
+  factory EmbedResult.failure(
+    EmbedErrorCode code,
+    String message, {
+    Object? cause,
+  }) => EmbedResult(
+    success: false,
+    errorCode: code,
+    errorMessage: message,
+    cause: cause,
+  );
 
   /// Whether the file was left untouched because of C2PA.
   bool get skippedC2pa => errorCode == EmbedErrorCode.c2paDetected;
@@ -70,6 +99,9 @@ class EmbedResult {
   bool get isFormatError =>
       errorCode == EmbedErrorCode.formatNotRecognized ||
       errorCode == EmbedErrorCode.formatUnsupported;
+
+  /// Whether the failure came from the file system rather than the format.
+  bool get isWriteError => errorCode == EmbedErrorCode.writeFailed;
 }
 
 /// Reads and writes provenance metadata of media files.
@@ -259,20 +291,50 @@ class MetadataService {
           );
       }
       return EmbedResult.embedded();
-    } on ArgumentError catch (error) {
-      return EmbedResult.failure(
-        EmbedErrorCode.formatUnsupported,
-        'Write failed: ${error.message}',
-      );
     } on Mp4WriteException catch (error) {
+      // A structural refusal is a format problem; an I/O failure is not.
+      if (error.code == Mp4WriteErrorCode.fileNotFound) {
+        return EmbedResult.failure(
+          EmbedErrorCode.fileNotFound,
+          error.message,
+          cause: error,
+        );
+      }
       return EmbedResult.failure(
         EmbedErrorCode.formatUnsupported,
         'Write failed: ${error.message}',
+        cause: error,
+      );
+    } on ArgumentError catch (error) {
+      // Raised by the writers for a payload the container cannot hold.
+      return EmbedResult.failure(
+        EmbedErrorCode.formatUnsupported,
+        'Write failed: ${error.message}',
+        cause: error,
+      );
+    } on FormatException catch (error) {
+      return EmbedResult.failure(
+        EmbedErrorCode.formatUnsupported,
+        'Write failed: ${error.message}',
+        cause: error,
+      );
+    } on FileRewriteException catch (error) {
+      return EmbedResult.failure(
+        EmbedErrorCode.writeFailed,
+        'Write failed: $error',
+        cause: error,
+      );
+    } on FileSystemException catch (error) {
+      return EmbedResult.failure(
+        EmbedErrorCode.writeFailed,
+        'Write failed: $error',
+        cause: error,
       );
     } catch (error) {
       return EmbedResult.failure(
         EmbedErrorCode.writeFailed,
         'Write failed: $error',
+        cause: error,
       );
     }
   }

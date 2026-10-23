@@ -1,7 +1,7 @@
 # provenance_dart
 
 A pure Dart implementation of
-[provenance-spec](https://github.com/joopererer/provenance-spec) 0.1.4 — read
+[provenance-spec](https://github.com/joopererer/provenance-spec) 0.1.5 — read
 and write provenance metadata (where a file came from, who made it, when it was
 captured) as XMP inside JPEG, PNG, WebP, MP4 and MOV files, and in `.xmp`
 sidecar files.
@@ -40,7 +40,7 @@ Add the dependency:
 
 ```yaml
 dependencies:
-  provenance_dart: ^0.2.0
+  provenance_dart: ^0.2.1
 ```
 
 The spec is a git submodule at `spec/`, pinned to a release tag. The test
@@ -153,9 +153,50 @@ The in-place writer works in an order that survives interruption: a last box
 with `size == 0` gets its real size first, then the new box is appended and
 flushed, and only then are the old boxes retired. Any failure truncates the
 file back to its original length and restores every byte it changed. It refuses
-a truncated file (`Mp4WriteErrorCode.truncatedFile`) and a `size == 0` last box
-larger than 4 GiB (`Mp4WriteErrorCode.requiresLargeSize`, which would need a
-64-bit header in the middle of the file).
+a truncated file whose last box is not a recoverable XMP box
+(`Mp4WriteErrorCode.truncatedFile`) and a `size == 0` last box larger than
+4 GiB (`Mp4WriteErrorCode.requiresLargeSize`, which would need a 64-bit header
+in the middle of the file).
+
+**Recovering from an interrupted append.** If a previous write was killed
+before it finished, the file ends with a half-written XMP `uuid` box. SPEC
+§4.7 allows a writer to truncate that box away and write normally, and both
+writers do: the incomplete box is dropped, the new box takes its place, and the
+complete XMP box before it is retired as usual. Any other truncation is still
+refused, because a box appended after unreachable bytes could never be found by
+a conformant reader. If the recovery write itself fails, the incomplete bytes
+are put back, so the file is byte-identical to what it was before the attempt.
+
+### Error handling
+
+`MetadataService.embedProvenance` never throws for a write failure; it returns
+an `EmbedResult` whose `errorCode` says what kind of problem it was:
+
+| `errorCode` | Meaning |
+|---|---|
+| `formatUnsupported` | The container cannot hold the XMP: not an MP4 / MOV, a truncated non-XMP box, a `size == 0` box over 4 GiB, or a payload the format cannot hold. Use a sidecar. |
+| `writeFailed` | The file system refused the write: permission denied, a locked file, a full disk, a failed rename. The file is unchanged. |
+| `c2paDetected` | The file is C2PA signed; use a sidecar. |
+| `fileNotFound` | The file does not exist. |
+
+A permission error is never reported as a format problem. The original
+exception is kept in `EmbedResult.cause`, so a caller can tell "Permission
+denied" from "No space left on device":
+
+```dart
+final result = await MetadataService.embedProvenance(
+  filePath: 'clip.mp4',
+  provenance: provenance,
+);
+
+if (result.isWriteError) {
+  final cause = result.cause;
+  if (cause is FileSystemException) {
+    print(cause.osError?.message); // e.g. "Permission denied"
+  }
+  // The file is untouched; retry later or fall back to a sidecar.
+}
+```
 
 ### MP4 / MOV read algorithm (for native implementations)
 
@@ -173,7 +214,8 @@ every file:
       `headerSize = 8`, `boxSize = length - position`.
    4. Else if `size < 8`, stop. Otherwise `headerSize = 8`, `boxSize = size`.
    5. If `position + boxSize > length` the box is truncated: report it and
-      stop.
+      stop. Boxes already visited stay valid — a truncated file still yields
+      the last complete XMP box before the truncation point.
    6. If `type == 'uuid'`, read the 16 bytes at `position + headerSize`. If they
       equal `BE7ACFCB-97A9-42E8-9C71-999491E3AFAC` this is the XMP box, whose
       packet starts at `position + headerSize + 16` and ends at
@@ -201,7 +243,7 @@ print(package.text); // only the rating changed
 | Area | Members |
 |---|---|
 | Orchestration | `MetadataService.readProvenance`, `readEmbeddedXmp`, `readSidecarXmpText`, `readEmbedded`, `readSidecar`, `detectFormat`, `hasC2pa`, `embedProvenance`, `writeSidecar`; `EmbedResult`, `EmbedErrorCode` |
-| Spec | `provenanceSpecVersion` (the implemented spec release, currently `0.1.4`) |
+| Spec | `provenanceSpecVersion` (the implemented spec release, currently `0.1.5`) |
 | Model | `XmpProvenance`, `XmpFields` |
 | Building | `ProvenanceBuilder`, `generateAssetId`, `truncateDescription`, `maxDescriptionLength` |
 | XMP core | `parseXmpFields`, `parseXmpXml`, `mergeProvenance`, `mergeProvenanceXml`, `mergeXmpFields`, `buildXmpXml`, `writeProvenanceIntoPackage`, `updateXmpXml` |
@@ -269,12 +311,14 @@ and `writeFileAtomically`.
   holds a partially written copy and is never the original. Callers that scan a
   directory should ignore that suffix; the next write to the same target
   replaces it. `appendMp4XmpInPlace` never creates a temporary file.
-- **An MP4 / MOV whose box chain ends before EOF is refused.** If the last
-  top-level box does not end exactly at the end of the file — a truncated
-  download, or trailing bytes outside any box — a new box appended at EOF could
-  never be reached by a conformant reader, so the write fails with
-  `Mp4WriteErrorCode.truncatedFile` and the file is left untouched. Use a
-  sidecar instead.
+- **An MP4 / MOV whose box chain ends before EOF is refused, unless the last
+  box is a half-written XMP box.** If the last top-level box does not end
+  exactly at the end of the file — a truncated download, or trailing bytes
+  outside any box — a new box appended at EOF could never be reached by a
+  conformant reader, so the write fails with
+  `Mp4WriteErrorCode.truncatedFile` and the file is left untouched. The one
+  exception is an incomplete XMP `uuid` box left by an interrupted append: it
+  is truncated away and the write proceeds (SPEC §4.7).
 - **An MP4 / MOV with a `size == 0` last box over 4 GiB is refused in place.**
   Making the size explicit needs a 64-bit header, which would shift the media
   data; `appendMp4XmpInPlace` reports
@@ -305,7 +349,7 @@ run inside `Isolate.run` or a worker pool:
 
 ## Scope
 
-Implemented for 0.2.0:
+Implemented for 0.2.1:
 
 - JPEG, PNG, WebP and MP4 / MOV embedded XMP, plus `.xmp` sidecar files.
 - SPEC §4.4 field-by-field merge, §4.6 write policy, §4.7 read and write

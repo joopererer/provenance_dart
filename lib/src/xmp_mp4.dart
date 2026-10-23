@@ -380,9 +380,9 @@ Uint8List writeMp4Xmp(Uint8List bytes, XmpProvenance provenance) {
       : updateXmpXml(currentXml, provenance);
   final plan = _planWrite(boxes, bytes.length, xml);
 
-  final output = Uint8List(bytes.length + plan.newBox.length);
-  output.setRange(0, bytes.length, bytes);
-  output.setRange(bytes.length, output.length, plan.newBox);
+  final output = Uint8List(plan.appendAt + plan.newBox.length);
+  output.setRange(0, plan.appendAt, bytes);
+  output.setRange(plan.appendAt, output.length, plan.newBox);
 
   if (plan.sizeZeroBox != null) {
     _writeU32(output, plan.sizeZeroBox!.start, plan.materializedSize!);
@@ -420,9 +420,10 @@ Future<void> writeMp4XmpToFile(
   }
 
   late final _Mp4WritePlan plan;
+  late final int length;
   final handle = await file.open();
   try {
-    final length = await handle.length();
+    length = await handle.length();
     final boxes = await scanMp4BoxesFromFile(handle);
     final currentXml = await _currentXmlFromFile(handle, boxes);
     final xml = currentXml == null
@@ -446,7 +447,9 @@ Future<void> writeMp4XmpToFile(
   for (final box in plan.oldXmpBoxes) {
     regions.add(FileRegion(box.typeOffset, box.typeOffset + 4, _freeBytes));
   }
-  regions.add(FileRegion(plan.appendAt, plan.appendAt, plan.newBox));
+  // Replacing `[appendAt, length)` with the new box both appends it and drops
+  // an incomplete XMP box left behind by an interrupted append.
+  regions.add(FileRegion(plan.appendAt, length, plan.newBox));
 
   await rewriteFile(
     path,
@@ -496,6 +499,7 @@ Future<void> appendMp4XmpInPlace(
   final originalLength = await handle.length();
   _Mp4WritePlan? plan;
   var sizeZeroPatched = false;
+  var tailTruncated = false;
   final patchedTypes = <Mp4Box>[];
 
   try {
@@ -506,6 +510,15 @@ Future<void> appendMp4XmpInPlace(
         : updateXmpXml(currentXml, provenance);
     plan = _planWrite(boxes, originalLength, xml, path: path);
 
+    // Keep the bytes of an incomplete trailing XMP box, so a failure can put
+    // them back exactly.
+    if (plan.truncateFrom != null) {
+      await handle.setPosition(plan.truncateFrom!);
+      plan = plan.withSavedTail(
+        await handle.read(originalLength - plan.truncateFrom!),
+      );
+    }
+
     final failurePoint = debugFailInPlaceAt;
 
     // 1. Make an open-ended last box explicit before writing past it.
@@ -515,8 +528,14 @@ Future<void> appendMp4XmpInPlace(
       sizeZeroPatched = true;
     }
 
-    // 2. Append the new box.
-    await handle.setPosition(originalLength);
+    // 2. Drop an incomplete XMP box left behind by an interrupted append.
+    if (plan.truncateFrom != null) {
+      await handle.truncate(plan.truncateFrom!);
+      tailTruncated = true;
+    }
+
+    // 3. Append the new box.
+    await handle.setPosition(plan.appendAt);
     if (failurePoint == Mp4WriteFailurePoint.duringAppend) {
       await handle.writeFrom(plan.newBox.sublist(0, plan.newBox.length ~/ 2));
       throw const FileSystemException('Simulated in-place write failure');
@@ -528,7 +547,7 @@ Future<void> appendMp4XmpInPlace(
       throw const FileSystemException('Simulated in-place write failure');
     }
 
-    // 3. Retire the old boxes.
+    // 4. Retire the old boxes.
     for (final box in plan.oldXmpBoxes) {
       await handle.setPosition(box.typeOffset);
       await handle.writeFrom(_freeBytes);
@@ -545,6 +564,7 @@ Future<void> appendMp4XmpInPlace(
       originalLength: originalLength,
       plan: plan,
       sizeZeroPatched: sizeZeroPatched,
+      tailTruncated: tailTruncated,
       patchedTypes: patchedTypes,
     );
     rethrow;
@@ -566,10 +586,15 @@ Future<void> _rollBack(
   required int originalLength,
   required _Mp4WritePlan? plan,
   required bool sizeZeroPatched,
+  required bool tailTruncated,
   required List<Mp4Box> patchedTypes,
 }) async {
   try {
     await handle.truncate(originalLength);
+    if (tailTruncated && plan?.savedTail != null) {
+      await handle.setPosition(plan!.truncateFrom!);
+      await handle.writeFrom(plan.savedTail!);
+    }
     for (final box in patchedTypes) {
       await handle.setPosition(box.typeOffset);
       await handle.writeFrom(box.typeBytes);
@@ -591,6 +616,8 @@ class _Mp4WritePlan {
     required this.oldXmpBoxes,
     required this.sizeZeroBox,
     required this.materializedSize,
+    required this.truncateFrom,
+    required this.savedTail,
   });
 
   final List<int> newBox;
@@ -598,6 +625,25 @@ class _Mp4WritePlan {
   final List<Mp4Box> oldXmpBoxes;
   final Mp4Box? sizeZeroBox;
   final int? materializedSize;
+
+  /// Offset from which the file must be truncated before the new box is
+  /// written, when an interrupted append left an incomplete XMP box behind.
+  final int? truncateFrom;
+
+  /// The bytes of `[truncateFrom, originalLength)`, kept so a failed write can
+  /// restore them exactly.
+  final Uint8List? savedTail;
+
+  /// Returns a copy of this plan with [savedTail] filled in.
+  _Mp4WritePlan withSavedTail(Uint8List tail) => _Mp4WritePlan(
+    newBox: newBox,
+    appendAt: appendAt,
+    oldXmpBoxes: oldXmpBoxes,
+    sizeZeroBox: sizeZeroBox,
+    materializedSize: materializedSize,
+    truncateFrom: truncateFrom,
+    savedTail: tail,
+  );
 }
 
 _Mp4WritePlan _planWrite(
@@ -614,7 +660,25 @@ _Mp4WritePlan _planWrite(
     );
   }
   final last = boxes.last;
-  if (last.isTruncated || last.stop != length) {
+
+  // An interrupted append leaves an incomplete XMP box at the end. SPEC §4.7
+  // allows truncating it away and writing normally; any other truncation is
+  // still refused, because a box appended after unreachable bytes could never
+  // be found by a conformant reader.
+  int? truncateFrom;
+  if (last.isTruncated) {
+    final available = length - last.start;
+    if (last.isXmp && available >= 24 && available <= maxMp4XmpBytes) {
+      truncateFrom = last.start;
+    } else {
+      throw Mp4WriteException(
+        Mp4WriteErrorCode.truncatedFile,
+        'The last top-level box is incomplete and is not a recoverable '
+        'XMP box',
+        path,
+      );
+    }
+  } else if (last.stop != length) {
     throw Mp4WriteException(
       Mp4WriteErrorCode.truncatedFile,
       'The last top-level box does not end at the end of the file',
@@ -624,7 +688,7 @@ _Mp4WritePlan _planWrite(
 
   Mp4Box? sizeZero;
   int? materialized;
-  if (last.extendsToEnd) {
+  if (truncateFrom == null && last.extendsToEnd) {
     final actual = length - last.start;
     if (actual > 0xFFFFFFFF) {
       throw Mp4WriteException(
@@ -640,10 +704,14 @@ _Mp4WritePlan _planWrite(
 
   return _Mp4WritePlan(
     newBox: _encodeXmpBox(xml),
-    appendAt: length,
-    oldXmpBoxes: boxes.where((box) => box.isXmp).toList(growable: false),
+    appendAt: truncateFrom ?? length,
+    oldXmpBoxes: boxes
+        .where((box) => box.isXmp && box.start != truncateFrom)
+        .toList(growable: false),
     sizeZeroBox: sizeZero,
     materializedSize: materialized,
+    truncateFrom: truncateFrom,
+    savedTail: null,
   );
 }
 

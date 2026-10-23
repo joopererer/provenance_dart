@@ -1,3 +1,55 @@
+## 0.2.1
+
+Implements provenance-spec **0.1.5**, which revises the MP4 / MOV truncation
+and recovery rules.
+
+### Fixed
+
+- **A permission error is no longer reported as a format problem.**
+  `MetadataService.embedProvenance` now classifies failures explicitly:
+  - a structural refusal (`Mp4WriteException` with `notMp4`, `truncatedFile` or
+    `requiresLargeSize`, an oversized payload, a malformed container) returns
+    `EmbedErrorCode.formatUnsupported`;
+  - an I/O or permission failure while opening, reading, writing or truncating
+    returns `EmbedErrorCode.writeFailed`.
+
+  The same rule now applies to JPEG, PNG and WebP: a read-only file or a
+  read-only directory returns `writeFailed`, never `formatUnsupported`.
+- **The original exception is preserved.** `EmbedResult` gains a `cause` field
+  holding the exception that failed the write, so a caller can tell
+  "Permission denied" from "No space left on device". `EmbedResult.isWriteError`
+  was added as a shorthand.
+
+### Added
+
+- **Recovery from an interrupted append** (SPEC §4.7). When the last top-level
+  box is an incomplete XMP `uuid` box (at least 24 bytes, type `uuid`, matching
+  UUID), both writers truncate it away and write normally instead of refusing
+  the file. The incomplete bytes are kept in memory, so a failure during the
+  recovery write restores them and leaves the file byte-identical. Any other
+  truncation is still refused with `Mp4WriteErrorCode.truncatedFile`.
+- **Truncation-tolerant reading** (SPEC §4.7): a complete XMP box before the
+  truncation point is still returned, even when a later box is cut short.
+
+### Changed
+
+- `provenanceSpecVersion` is now `'0.1.5'`.
+- The spec submodule is pinned to `v0.1.5`.
+- `mp4-mdat-uuid-noise.mp4` is now a valid file with a real top-level XMP box,
+  so both write interfaces accept it. `mp4-truncated-xmp.mp4` and the new
+  `mp4-interrupted-append.mp4` are writable through the recovery rule.
+
+### Tests
+
+- `mp4-interrupted-append.mp4` reads the complete old block and writes cleanly
+  through both interfaces, with the media bytes unchanged.
+- A simulated kill mid-append (half a box written directly, no rollback) is
+  repaired by the next in-place write.
+- Rollback is byte-identical for the interrupted-append file at all three
+  failure points.
+- Read-only MP4 (both modes), JPEG, PNG and WebP return `writeFailed` with the
+  original `FileSystemException` / `FileRewriteException` in `cause`.
+
 ## 0.2.0
 
 Implements provenance-spec **0.1.4**, which adds MP4 / MOV support.
