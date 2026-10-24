@@ -1,7 +1,7 @@
 # provenance_dart
 
 A pure Dart implementation of
-[provenance-spec](https://github.com/joopererer/provenance-spec) 0.1.5 — read
+[provenance-spec](https://github.com/joopererer/provenance-spec) 0.1.6 — read
 and write provenance metadata (where a file came from, who made it, when it was
 captured) as XMP inside JPEG, PNG, WebP, MP4 and MOV files, and in `.xmp`
 sidecar files.
@@ -28,6 +28,9 @@ Flutter apps, in command-line tools and inside isolates.
 - **C2PA aware**: files carrying content credentials are detected and left
   alone, so their signature stays valid (SPEC §4.3).
 - **URL normalization** for `prov:sourceUrl` (SPEC §5).
+- **AI annotations** (SPEC §3.7): `prov:aiLabel`, `prov:aiLabelSource` and
+  `Iptc4xmpExt:DigitalSourceType` are read and written like every other
+  field, and an existing `DigitalSourceType` is never overwritten.
 - **Tolerant reading**: unknown fields are ignored and preserved, missing
   fields do not fail a read (SPEC §1).
 - **Truncated files are safe**: a PNG chunk, JPEG segment or WebP chunk cut
@@ -40,7 +43,7 @@ Add the dependency:
 
 ```yaml
 dependencies:
-  provenance_dart: ^0.2.1
+  provenance_dart: ^0.2.2
 ```
 
 The spec is a git submodule at `spec/`, pinned to a release tag. The test
@@ -238,16 +241,85 @@ package.setField(XmpField.rating, 5);
 print(package.text); // only the rating changed
 ```
 
+`setField` writes a scalar, a list or `null`/`undefined` (remove). Passing an
+**empty list** also removes the whole field, which is what an editor that
+cleared every value of a bag should do:
+
+```dart
+package.setField(XmpField.creator, <String>[]); // dc:creator disappears
+```
+
+### Writing an edited package back to the file
+
+`writeXmpTextToFile` stores a package the caller already edited. The container
+is detected from the file header, and the atomic / in-place rules are the ones
+described above — a media file is replaced through a temporary file plus a
+rename, an MP4 / MOV can be appended to in place, and a `.xmp` path is written
+as a sidecar:
+
+```dart
+final package = XmpPackage.parse(readJpegXmpText(bytes)!);
+package.setField(XmpField.rating, 5);
+await writeXmpTextToFile('photo.jpg', package.text);
+
+// A large shared video: append in place, no temporary file, no full read.
+await writeXmpTextToFile(
+  'clip.mp4',
+  package.text,
+  mp4WriteMode: Mp4WriteMode.inPlace,
+);
+```
+
+The package is parsed before anything is written, so malformed XML throws a
+`FormatException` and leaves the file untouched. An unsupported container
+throws `UnsupportedError` (write a sidecar instead).
+
+Unlike `MetadataService.embedProvenance` this does **not** apply the write
+policy of SPEC §4.6: it does not merge fields, does not refuse to overwrite a
+capture field, and does not check C2PA. It stores exactly the package it is
+given. Use `MetadataService.embedProvenance` when the spec's policy should be
+enforced, and this function when the caller decided the final content.
+
+### AI annotation fields (SPEC §3.7)
+
+`XmpProvenance` carries the three AI fields of spec v0.1.6:
+
+| JSON (SPEC §7) | XMP | Notes |
+|---|---|---|
+| `aiLabel` | `prov:aiLabel` | Stored verbatim: never translated, never rewritten |
+| `aiLabelSource` | `prov:aiLabelSource` | `platform`, `author` or `unknown` |
+| `digitalSourceType` | `Iptc4xmpExt:DigitalSourceType` | IPTC newscodes URI |
+
+```dart
+final provenance = ProvenanceBuilder(
+  assetId: assetId,
+  capturedAt: DateTime.now(),
+  capturedBy: 'MyApp/1.0.0',
+  aiLabel: '内容疑似包含 AI 创作信息', // kept exactly as given
+  aiLabelSource: aiLabelSourcePlatform,
+).build();
+```
+
+When an `aiLabel` is present the builder fills in
+`Iptc4xmpExt:DigitalSourceType =
+http://cv.iptc.org/newscodes/digitalsourcetype/compositeWithTrainedAlgorithmicMedia`
+— but only when the file has no `DigitalSourceType` yet. All three fields are
+capture fields, so an existing value in the file wins over the one being
+written (SPEC §4.6). A source value outside the three spec values is read as
+`unknown`.
+
 ## Public API
 
 | Area | Members |
 |---|---|
 | Orchestration | `MetadataService.readProvenance`, `readEmbeddedXmp`, `readSidecarXmpText`, `readEmbedded`, `readSidecar`, `detectFormat`, `hasC2pa`, `embedProvenance`, `writeSidecar`; `EmbedResult`, `EmbedErrorCode` |
-| Spec | `provenanceSpecVersion` (the implemented spec release, currently `0.1.5`) |
+| Spec | `provenanceSpecVersion` (the implemented spec release, currently `0.1.6`) |
 | Model | `XmpProvenance`, `XmpFields` |
 | Building | `ProvenanceBuilder`, `generateAssetId`, `truncateDescription`, `maxDescriptionLength` |
 | XMP core | `parseXmpFields`, `parseXmpXml`, `mergeProvenance`, `mergeProvenanceXml`, `mergeXmpFields`, `buildXmpXml`, `writeProvenanceIntoPackage`, `updateXmpXml` |
 | In-place editing | `XmpPackage`, `escapeAttributeValue`, `escapeText` |
+| Edited packages | `writeXmpTextToFile`, `isSidecarPath`, `writeJpegXmpText`, `writePngXmpText`, `writeWebpXmpText`, `writeMp4XmpText`, `writeJpegXmpTextToFile`, `writePngXmpTextToFile`, `writeWebpXmpTextToFile`, `writeMp4XmpTextToFile`, `appendMp4XmpTextInPlace` |
+| AI annotation | `XmpProvenance.aiLabel`/`aiLabelSource`/`digitalSourceType`, `aiLabelSourcePlatform`, `aiLabelSourceAuthor`, `aiLabelSourceUnknown`, `normalizeAiLabelSource`, `compositeWithTrainedAlgorithmicMedia`, `iptcExtNsUri` |
 | Fields | `XmpField`, `XmpFieldClass`, `XmpValueKind`, namespace URI constants |
 | JPEG | `readJpegXmp`, `writeJpegXmp`, `readJpegXmpText`, `scanJpegSegments`, `readJpegXmpFromFile`, `readJpegXmpTextFromFile`, `scanJpegSegmentsFromFile`, `writeJpegXmpToFile`, `JpegSegment`, `xmpApp1Header`, `exifApp1Header`, `maxJpegXmpBytes` |
 | PNG | `readPngXmp`, `writePngXmp`, `readPngXmpText`, `readPngXmpTextFromFile`, `scanPngChunks`, `scanPngChunksFromFile`, `readPngXmpFromFile`, `writePngXmpToFile`, `PngChunk`, `pngXmpKeyword`, `crc32` |
@@ -349,9 +421,13 @@ run inside `Isolate.run` or a worker pool:
 
 ## Scope
 
-Implemented for 0.2.1:
+Implemented for 0.2.2:
 
 - JPEG, PNG, WebP and MP4 / MOV embedded XMP, plus `.xmp` sidecar files.
+- Reading and writing a ready-made package (`writeXmpTextToFile`), for callers
+  that edited `XmpPackage` themselves.
+- SPEC §3.7 AI annotation fields: `prov:aiLabel`, `prov:aiLabelSource` and
+  `Iptc4xmpExt:DigitalSourceType`.
 - SPEC §4.4 field-by-field merge, §4.6 write policy, §4.7 read and write
   requirements.
 - Atomic writes: temporary file in the same directory, flushed, then renamed;

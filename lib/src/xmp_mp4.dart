@@ -375,9 +375,20 @@ Future<String?> readMp4XmpTextFromFile(RandomAccessFile file) async {
 Uint8List writeMp4Xmp(Uint8List bytes, XmpProvenance provenance) {
   final boxes = scanMp4Boxes(bytes);
   final currentXml = _currentXml(bytes, boxes);
-  final xml = currentXml == null
-      ? buildXmpXml(provenance)
-      : updateXmpXml(currentXml, provenance);
+  return writeMp4XmpText(
+    bytes,
+    currentXml == null
+        ? buildXmpXml(provenance)
+        : updateXmpXml(currentXml, provenance),
+  );
+}
+
+/// Writes the XMP package [xml] into [bytes] and returns the new file bytes.
+///
+/// Like [writeMp4Xmp], but the package is supplied ready-made instead of
+/// being derived from a provenance record.
+Uint8List writeMp4XmpText(Uint8List bytes, String xml) {
+  final boxes = scanMp4Boxes(bytes);
   final plan = _planWrite(boxes, bytes.length, xml);
 
   final output = Uint8List(plan.appendAt + plan.newBox.length);
@@ -409,6 +420,35 @@ Future<void> writeMp4XmpToFile(
   String path,
   XmpProvenance provenance, {
   bool preserveModificationTime = false,
+}) => _writeMp4ToFile(
+  path,
+  (currentXml) => currentXml == null
+      ? buildXmpXml(provenance)
+      : updateXmpXml(currentXml, provenance),
+  preserveModificationTime: preserveModificationTime,
+);
+
+/// Writes the XMP package [xml] into the MP4 / MOV file at [path] by
+/// replacing it.
+///
+/// Like [writeMp4XmpToFile], but the package is supplied ready-made instead of
+/// being derived from a provenance record.
+Future<void> writeMp4XmpTextToFile(
+  String path,
+  String xml, {
+  bool preserveModificationTime = false,
+}) => _writeMp4ToFile(
+  path,
+  (_) => xml,
+  preserveModificationTime: preserveModificationTime,
+);
+
+/// Plans and writes an MP4 / MOV, letting [resolveXml] turn the existing
+/// package into the one to store.
+Future<void> _writeMp4ToFile(
+  String path,
+  String Function(String? currentXml) resolveXml, {
+  required bool preserveModificationTime,
 }) async {
   final file = File(path);
   if (!await file.exists()) {
@@ -426,10 +466,7 @@ Future<void> writeMp4XmpToFile(
     length = await handle.length();
     final boxes = await scanMp4BoxesFromFile(handle);
     final currentXml = await _currentXmlFromFile(handle, boxes);
-    final xml = currentXml == null
-        ? buildXmpXml(provenance)
-        : updateXmpXml(currentXml, provenance);
-    plan = _planWrite(boxes, length, xml, path: path);
+    plan = _planWrite(boxes, length, resolveXml(currentXml), path: path);
   } finally {
     await handle.close();
   }
@@ -482,6 +519,34 @@ Future<void> appendMp4XmpInPlace(
   String path,
   XmpProvenance provenance, {
   bool preserveModificationTime = false,
+}) => _appendMp4InPlace(
+  path,
+  (currentXml) => currentXml == null
+      ? buildXmpXml(provenance)
+      : updateXmpXml(currentXml, provenance),
+  preserveModificationTime: preserveModificationTime,
+);
+
+/// Writes the XMP package [xml] into the MP4 / MOV file at [path] in place.
+///
+/// Like [appendMp4XmpInPlace], but the package is supplied ready-made instead
+/// of being derived from a provenance record.
+Future<void> appendMp4XmpTextInPlace(
+  String path,
+  String xml, {
+  bool preserveModificationTime = false,
+}) => _appendMp4InPlace(
+  path,
+  (_) => xml,
+  preserveModificationTime: preserveModificationTime,
+);
+
+/// Appends to an MP4 / MOV, letting [resolveXml] turn the existing package
+/// into the one to store.
+Future<void> _appendMp4InPlace(
+  String path,
+  String Function(String? currentXml) resolveXml, {
+  required bool preserveModificationTime,
 }) async {
   final file = File(path);
   final stat = await file.stat();
@@ -505,10 +570,12 @@ Future<void> appendMp4XmpInPlace(
   try {
     final boxes = await scanMp4BoxesFromFile(handle);
     final currentXml = await _currentXmlFromFile(handle, boxes);
-    final xml = currentXml == null
-        ? buildXmpXml(provenance)
-        : updateXmpXml(currentXml, provenance);
-    plan = _planWrite(boxes, originalLength, xml, path: path);
+    plan = _planWrite(
+      boxes,
+      originalLength,
+      resolveXml(currentXml),
+      path: path,
+    );
 
     // Keep the bytes of an incomplete trailing XMP box, so a failure can put
     // them back exactly.

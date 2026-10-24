@@ -52,6 +52,8 @@ class ProvenanceBuilder {
     this.existingAssetId,
     this.capturedAt,
     this.creditPlatformName,
+    this.aiLabel,
+    this.aiLabelSource,
     this.schema = '0.1',
     this.assetIdGenerator,
   });
@@ -105,6 +107,16 @@ class ProvenanceBuilder {
   /// `prov:schema`, the spec version.
   final String schema;
 
+  /// `prov:aiLabel`, the AI disclosure text exactly as the platform or author
+  /// stated it (SPEC §3.7). Stored verbatim: it is never translated or
+  /// reworded.
+  final String? aiLabel;
+
+  /// `prov:aiLabelSource`: `platform`, `author` or `unknown` (SPEC §3.7).
+  ///
+  /// Any other value becomes `unknown`.
+  final String? aiLabelSource;
+
   /// Overrides how a new `assetId` is generated, for tests.
   final String Function()? assetIdGenerator;
 
@@ -134,6 +146,13 @@ class ProvenanceBuilder {
       credit: authorName == null || creditPlatformName == null
           ? null
           : '$authorName / $creditPlatformName',
+      aiLabel: aiLabel,
+      aiLabelSource: aiLabelSource,
+      // An AI label implies the IPTC source type, but the write path only
+      // adds it when the file has no value of its own (SPEC §3.4, §4.6).
+      digitalSourceType: aiLabel == null
+          ? null
+          : compositeWithTrainedAlgorithmicMedia,
     );
   }
 }

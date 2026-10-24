@@ -115,6 +115,7 @@ export 'src/xmp_fields.dart'
         XmpValueKind,
         adobeMetaNsUri,
         dcNsUri,
+        iptcExtNsUri,
         photoshopNsUri,
         provNsUri,
         rdfNsUri,
@@ -131,9 +132,19 @@ export 'src/xmp_jpeg.dart'
         scanJpegSegments,
         scanJpegSegmentsFromFile,
         writeJpegXmp,
+        writeJpegXmpText,
+        writeJpegXmpTextToFile,
         writeJpegXmpToFile,
         xmpApp1Header;
-export 'src/xmp_model.dart' show XmpFields, XmpProvenance;
+export 'src/xmp_model.dart'
+    show
+        XmpFields,
+        XmpProvenance,
+        aiLabelSourceAuthor,
+        aiLabelSourcePlatform,
+        aiLabelSourceUnknown,
+        compositeWithTrainedAlgorithmicMedia,
+        normalizeAiLabelSource;
 export 'src/xmp_mp4.dart'
     show
         Mp4Box,
@@ -142,6 +153,7 @@ export 'src/xmp_mp4.dart'
         Mp4WriteException,
         Mp4WriteMode,
         appendMp4XmpInPlace,
+        appendMp4XmpTextInPlace,
         isMp4Header,
         maxMp4XmpBytes,
         mp4C2paUuid,
@@ -154,6 +166,8 @@ export 'src/xmp_mp4.dart'
         scanMp4Boxes,
         scanMp4BoxesFromFile,
         writeMp4Xmp,
+        writeMp4XmpText,
+        writeMp4XmpTextToFile,
         writeMp4XmpToFile;
 export 'src/xmp_package.dart' show XmpPackage, escapeAttributeValue, escapeText;
 export 'src/xmp_png.dart'
@@ -167,6 +181,8 @@ export 'src/xmp_png.dart'
         scanPngChunks,
         scanPngChunksFromFile,
         writePngXmp,
+        writePngXmpText,
+        writePngXmpTextToFile,
         writePngXmpToFile;
 export 'src/xmp_sidecar.dart'
     show
@@ -175,6 +191,7 @@ export 'src/xmp_sidecar.dart'
         sidecarPathFor,
         writeSidecarFor,
         writeSidecarXmp;
+export 'src/xmp_text_writer.dart' show isSidecarPath, writeXmpTextToFile;
 export 'src/xmp_webp.dart'
     show
         WebpChunk,
@@ -186,6 +203,8 @@ export 'src/xmp_webp.dart'
         webpXmpFlag,
         webpXmpFourCc,
         writeWebpXmp,
+        writeWebpXmpText,
+        writeWebpXmpTextToFile,
         writeWebpXmpToFile;
 export 'src/xml_scanner.dart'
     show XmlAttr, XmlElementNode, XmlTextNode, parseXmlTree;

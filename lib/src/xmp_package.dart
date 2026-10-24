@@ -52,15 +52,22 @@ class XmpPackage {
   /// Sets [field] to [value], editing the existing node in place.
   ///
   /// A `null` value leaves the package untouched, so callers can pass optional
-  /// fields without special-casing them. When the field is absent it is added
-  /// to the first `rdf:Description`; when it is present only its value is
-  /// replaced, so surrounding markup survives.
+  /// fields without special-casing them. An **empty list** removes the field
+  /// entirely: a caller that clears a list (for example an emptied
+  /// `dc:subject`) means "this field is now gone", not "write an empty
+  /// container". When the field is absent it is added to the first
+  /// `rdf:Description`; when it is present only its value is replaced, so
+  /// surrounding markup survives.
   ///
   /// Only the first occurrence is updated. A second occurrence of the same
   /// field in a later `rdf:Description` block is left alone, which keeps
   /// language variants of `dc:title` intact.
   void setField(XmpField field, Object? value) {
     if (value == null) return;
+    if (value is List && value.isEmpty) {
+      removeField(field);
+      return;
+    }
     final text = _scalarText(value);
     if (text == null) return;
 
@@ -189,6 +196,7 @@ class XmpPackage {
     'dc' => dcNsUri,
     'xmp' => xmpNsUri,
     'photoshop' => photoshopNsUri,
+    'Iptc4xmpExt' => iptcExtNsUri,
     _ => null,
   };
 

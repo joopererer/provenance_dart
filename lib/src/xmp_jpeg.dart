@@ -255,13 +255,32 @@ Uint8List writeJpegXmp(Uint8List bytes, XmpProvenance provenance) {
           ),
           allowMalformed: true,
         );
-  final plan = _planWrite(segments, existing, currentXml, provenance);
+  final xml = currentXml == null
+      ? buildXmpXml(provenance)
+      : updateXmpXml(currentXml, provenance);
+  final plan = _planWrite(segments, existing, xml);
 
   final builder = BytesBuilder(copy: false)
     ..add(bytes.sublist(0, plan.start))
     ..add(plan.segment)
     ..add(bytes.sublist(plan.stop));
   return builder.toBytes();
+}
+
+/// Writes the XMP package [xml] into the XMP APP1 segment of [bytes].
+///
+/// Like [writeJpegXmp], but the package is supplied ready-made instead of
+/// being derived from a provenance record.
+Uint8List writeJpegXmpText(Uint8List bytes, String xml) {
+  final segments = scanJpegSegments(bytes);
+  final existing = _findXmpSegment(bytes, segments);
+  final plan = _planWrite(segments, existing, xml);
+
+  return (BytesBuilder(copy: false)
+        ..add(bytes.sublist(0, plan.start))
+        ..add(plan.segment)
+        ..add(bytes.sublist(plan.stop)))
+      .toBytes();
 }
 
 /// Writes [provenance] into the XMP APP1 segment of the file at [path].
@@ -273,6 +292,36 @@ Future<void> writeJpegXmpToFile(
   String path,
   XmpProvenance provenance, {
   bool preserveModificationTime = false,
+}) => _writeJpegToFile(
+  path,
+  (currentXml) => currentXml == null
+      ? buildXmpXml(provenance)
+      : updateXmpXml(currentXml, provenance),
+  preserveModificationTime: preserveModificationTime,
+);
+
+/// Writes the XMP package [xml] into the XMP APP1 segment of the file at
+/// [path].
+///
+/// The file is rewritten through a temporary file, so a failure leaves the
+/// original untouched. Set [preserveModificationTime] to keep the original
+/// timestamp.
+Future<void> writeJpegXmpTextToFile(
+  String path,
+  String xml, {
+  bool preserveModificationTime = false,
+}) => _writeJpegToFile(
+  path,
+  (_) => xml,
+  preserveModificationTime: preserveModificationTime,
+);
+
+/// Plans and writes a JPEG, letting [resolveXml] turn the existing package
+/// into the one to store.
+Future<void> _writeJpegToFile(
+  String path,
+  String Function(String? currentXml) resolveXml, {
+  required bool preserveModificationTime,
 }) async {
   final file = await File(path).open();
   late final _WritePlan plan;
@@ -295,7 +344,7 @@ Future<void> writeJpegXmpToFile(
       currentXml = utf8.decode(payload, allowMalformed: true);
     }
 
-    plan = _planWrite(segments, existing, currentXml, provenance);
+    plan = _planWrite(segments, existing, resolveXml(currentXml));
   } finally {
     await file.close();
   }
@@ -316,12 +365,8 @@ class _WritePlan {
 _WritePlan _planWrite(
   List<JpegSegment> segments,
   JpegSegment? existing,
-  String? currentXml,
-  XmpProvenance provenance,
+  String xml,
 ) {
-  final xml = currentXml == null
-      ? buildXmpXml(provenance)
-      : updateXmpXml(currentXml, provenance);
   final xmlBytes = utf8.encode(xml);
   if (xmlBytes.length >= maxJpegXmpBytes) {
     throw ArgumentError.value(

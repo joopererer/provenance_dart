@@ -318,5 +318,6 @@ String? _conventionalPrefix(String? namespaceUri) => switch (namespaceUri) {
   dcNsUri => 'dc',
   xmpNsUri => 'xmp',
   photoshopNsUri => 'photoshop',
+  iptcExtNsUri => 'Iptc4xmpExt',
   _ => null,
 };

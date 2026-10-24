@@ -199,7 +199,26 @@ Uint8List writePngXmp(Uint8List bytes, XmpProvenance provenance) {
   final currentXml = existing == null
       ? null
       : _decodeItxtData(bytes.sublist(existing.dataStart, existing.dataStop));
-  final plan = _planWrite(chunks, existing, currentXml, provenance);
+  final xml = currentXml == null
+      ? buildXmpXml(provenance)
+      : updateXmpXml(currentXml, provenance);
+  final plan = _planWrite(chunks, existing, xml);
+
+  return (BytesBuilder(copy: false)
+        ..add(bytes.sublist(0, plan.start))
+        ..add(plan.chunk)
+        ..add(bytes.sublist(plan.stop)))
+      .toBytes();
+}
+
+/// Writes the XMP package [xml] into the XMP iTXt chunk of [bytes].
+///
+/// Like [writePngXmp], but the package is supplied ready-made instead of being
+/// derived from a provenance record.
+Uint8List writePngXmpText(Uint8List bytes, String xml) {
+  final chunks = scanPngChunks(bytes);
+  final existing = _findXmpChunk(bytes, chunks);
+  final plan = _planWrite(chunks, existing, xml);
 
   return (BytesBuilder(copy: false)
         ..add(bytes.sublist(0, plan.start))
@@ -217,6 +236,35 @@ Future<void> writePngXmpToFile(
   String path,
   XmpProvenance provenance, {
   bool preserveModificationTime = false,
+}) => _writePngToFile(
+  path,
+  (currentXml) => currentXml == null
+      ? buildXmpXml(provenance)
+      : updateXmpXml(currentXml, provenance),
+  preserveModificationTime: preserveModificationTime,
+);
+
+/// Writes the XMP package [xml] into the XMP iTXt chunk of the file at [path].
+///
+/// The file is rewritten through a temporary file, so a failure leaves the
+/// original untouched. Set [preserveModificationTime] to keep the original
+/// timestamp.
+Future<void> writePngXmpTextToFile(
+  String path,
+  String xml, {
+  bool preserveModificationTime = false,
+}) => _writePngToFile(
+  path,
+  (_) => xml,
+  preserveModificationTime: preserveModificationTime,
+);
+
+/// Plans and writes a PNG, letting [resolveXml] turn the existing package into
+/// the one to store.
+Future<void> _writePngToFile(
+  String path,
+  String Function(String? currentXml) resolveXml, {
+  required bool preserveModificationTime,
 }) async {
   final file = await File(path).open();
   late final _WritePlan plan;
@@ -235,7 +283,7 @@ Future<void> writePngXmpToFile(
         break;
       }
     }
-    plan = _planWrite(chunks, existing, currentXml, provenance);
+    plan = _planWrite(chunks, existing, resolveXml(currentXml));
   } finally {
     await file.close();
   }
@@ -253,16 +301,7 @@ class _WritePlan {
   final List<int> chunk;
 }
 
-_WritePlan _planWrite(
-  List<PngChunk> chunks,
-  PngChunk? existing,
-  String? currentXml,
-  XmpProvenance provenance,
-) {
-  final xml = currentXml == null
-      ? buildXmpXml(provenance)
-      : updateXmpXml(currentXml, provenance);
-
+_WritePlan _planWrite(List<PngChunk> chunks, PngChunk? existing, String xml) {
   final data = <int>[
     ...utf8.encode(pngXmpKeyword),
     0, // keyword terminator

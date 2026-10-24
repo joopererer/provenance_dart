@@ -158,16 +158,40 @@ Uint8List writeWebpXmp(Uint8List bytes, XmpProvenance provenance) {
           bytes.sublist(existing.dataStart, existing.dataStop),
           allowMalformed: true,
         );
+  return _writeWebpBytes(
+    bytes,
+    chunks,
+    existing,
+    currentXml == null
+        ? buildXmpXml(provenance)
+        : updateXmpXml(currentXml, provenance),
+  );
+}
+
+/// Writes the XMP package [xml] into the XMP chunk of [bytes].
+///
+/// Like [writeWebpXmp], but the package is supplied ready-made instead of
+/// being derived from a provenance record.
+Uint8List writeWebpXmpText(Uint8List bytes, String xml) {
+  final chunks = scanWebpChunks(bytes);
+  final existing = _findXmpChunk(chunks);
+  return _writeWebpBytes(bytes, chunks, existing, xml);
+}
+
+Uint8List _writeWebpBytes(
+  Uint8List bytes,
+  List<WebpChunk> chunks,
+  WebpChunk? existing,
+  String xml,
+) {
+  final vp8x = _findChunk(chunks, 'VP8X');
   final regions = _planWrite(
     chunks,
     bytes.length,
     existing,
-    currentXml,
-    provenance,
-    vp8xFlags: _findChunk(chunks, 'VP8X') == null
-        ? null
-        : bytes[_findChunk(chunks, 'VP8X')!.dataStart],
-    dimensions: _findChunk(chunks, 'VP8X') == null
+    xml,
+    vp8xFlags: vp8x == null ? null : bytes[vp8x.dataStart],
+    dimensions: vp8x == null
         ? _readDimensions(
             chunks,
             (offset, length) => bytes.sublist(offset, offset + length),
@@ -186,6 +210,35 @@ Future<void> writeWebpXmpToFile(
   String path,
   XmpProvenance provenance, {
   bool preserveModificationTime = false,
+}) => _writeWebpFile(
+  path,
+  (currentXml) => currentXml == null
+      ? buildXmpXml(provenance)
+      : updateXmpXml(currentXml, provenance),
+  preserveModificationTime: preserveModificationTime,
+);
+
+/// Writes the XMP package [xml] into the XMP chunk of the file at [path].
+///
+/// The file is rewritten through a temporary file, so a failure leaves the
+/// original untouched. Set [preserveModificationTime] to keep the original
+/// timestamp.
+Future<void> writeWebpXmpTextToFile(
+  String path,
+  String xml, {
+  bool preserveModificationTime = false,
+}) => _writeWebpFile(
+  path,
+  (_) => xml,
+  preserveModificationTime: preserveModificationTime,
+);
+
+/// Plans and writes a WebP, letting [resolveXml] turn the existing package
+/// into the one to store.
+Future<void> _writeWebpFile(
+  String path,
+  String Function(String? currentXml) resolveXml, {
+  required bool preserveModificationTime,
 }) async {
   final file = await File(path).open();
   late final List<FileRegion> regions;
@@ -214,8 +267,7 @@ Future<void> writeWebpXmpToFile(
       chunks,
       length,
       existing,
-      currentXml,
-      provenance,
+      resolveXml(currentXml),
       vp8xFlags: vp8xFlags,
       dimensions: dimensions,
     );
@@ -265,14 +317,10 @@ List<FileRegion> _planWrite(
   List<WebpChunk> chunks,
   int fileLength,
   WebpChunk? existing,
-  String? currentXml,
-  XmpProvenance provenance, {
+  String xml, {
   required int? vp8xFlags,
   required (int, int)? dimensions,
 }) {
-  final xml = currentXml == null
-      ? buildXmpXml(provenance)
-      : updateXmpXml(currentXml, provenance);
   final xmpChunk = _encodeChunk(webpXmpFourCc, utf8.encode(xml));
 
   final regions = <FileRegion>[];

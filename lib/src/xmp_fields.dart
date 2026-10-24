@@ -15,6 +15,10 @@ const String xmpNsUri = 'http://ns.adobe.com/xap/1.0/';
 /// Namespace URI of the Photoshop schema, used for `photoshop:Credit`.
 const String photoshopNsUri = 'http://ns.adobe.com/photoshop/1.0/';
 
+/// Namespace URI of the IPTC extension schema (SPEC §2), used for
+/// `Iptc4xmpExt:DigitalSourceType`.
+const String iptcExtNsUri = 'http://iptc.org/std/Iptc4xmpExt/2008-02-29/';
+
 /// Namespace URI of RDF, used for `rdf:RDF`, `rdf:Description` and containers.
 const String rdfNsUri = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#';
 
@@ -131,7 +135,30 @@ enum XmpField {
   dcSource(dcNsUri, 'source', XmpValueKind.scalar, XmpFieldClass.capture),
 
   /// `photoshop:Credit` — credit line `author / platform`.
-  credit(photoshopNsUri, 'Credit', XmpValueKind.scalar, XmpFieldClass.capture);
+  credit(photoshopNsUri, 'Credit', XmpValueKind.scalar, XmpFieldClass.capture),
+
+  /// `prov:aiLabel` — the AI disclosure text shown by the platform, verbatim
+  /// (SPEC §3.7).
+  aiLabel(provNsUri, 'aiLabel', XmpValueKind.scalar, XmpFieldClass.capture),
+
+  /// `prov:aiLabelSource` — who made the disclosure: `platform`, `author` or
+  /// `unknown` (SPEC §3.7).
+  aiLabelSource(
+    provNsUri,
+    'aiLabelSource',
+    XmpValueKind.scalar,
+    XmpFieldClass.capture,
+  ),
+
+  /// `Iptc4xmpExt:DigitalSourceType` — the IPTC digital source type URI
+  /// (SPEC §3.4). Added only when absent; an existing value is never
+  /// overwritten.
+  digitalSourceType(
+    iptcExtNsUri,
+    'DigitalSourceType',
+    XmpValueKind.scalar,
+    XmpFieldClass.capture,
+  );
 
   const XmpField(this.namespaceUri, this.localName, this.kind, this.fieldClass);
 
@@ -153,6 +180,7 @@ enum XmpField {
     dcNsUri => 'dc',
     xmpNsUri => 'xmp',
     photoshopNsUri => 'photoshop',
+    iptcExtNsUri => 'Iptc4xmpExt',
     _ => 'ns',
   };
 

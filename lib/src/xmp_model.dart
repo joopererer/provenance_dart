@@ -3,6 +3,34 @@
 import 'date_formatter.dart';
 import 'xmp_fields.dart';
 
+/// The AI disclosure came from the platform itself, for example a badge the
+/// site shows on AI-generated content (SPEC §3.7).
+const String aiLabelSourcePlatform = 'platform';
+
+/// The author declared the AI use in the caption or a tag (SPEC §3.7).
+const String aiLabelSourceAuthor = 'author';
+
+/// The source of the disclosure is unknown or was not stated (SPEC §3.7).
+const String aiLabelSourceUnknown = 'unknown';
+
+/// The IPTC `DigitalSourceType` written when a file carries an AI label
+/// (SPEC §3.4).
+///
+/// It says the media is a composite with trained algorithmic media, that is
+/// partly or wholly produced by a generative model.
+const String compositeWithTrainedAlgorithmicMedia =
+    'http://cv.iptc.org/newscodes/digitalsourcetype/'
+    'compositeWithTrainedAlgorithmicMedia';
+
+/// Maps [value] to one of the three values SPEC §3.7 allows.
+///
+/// Anything else, including `null`, becomes [aiLabelSourceUnknown].
+String normalizeAiLabelSource(String? value) => switch (value) {
+  aiLabelSourcePlatform => aiLabelSourcePlatform,
+  aiLabelSourceAuthor => aiLabelSourceAuthor,
+  _ => aiLabelSourceUnknown,
+};
+
 /// The raw field values read from an XMP package.
 ///
 /// This is the tolerant layer: it holds whatever the file contained, without
@@ -92,8 +120,14 @@ class XmpProvenance {
     this.subject,
     this.rating,
     this.credit,
+    this.aiLabel,
+    String? aiLabelSource,
+    this.digitalSourceType,
     this.otherFields = const {},
-  }) : _dateLiterals = const {};
+  }) : aiLabelSource = aiLabelSource == null
+           ? null
+           : normalizeAiLabelSource(aiLabelSource),
+       _dateLiterals = const {};
 
   XmpProvenance._withLiterals({
     required this.schema,
@@ -115,6 +149,9 @@ class XmpProvenance {
     required this.subject,
     required this.rating,
     required this.credit,
+    required this.aiLabel,
+    required this.aiLabelSource,
+    required this.digitalSourceType,
     required this.otherFields,
     required Map<String, String> dateLiterals,
   }) : _dateLiterals = dateLiterals;
@@ -182,6 +219,27 @@ class XmpProvenance {
   /// `photoshop:Credit`, the credit line `author / platform`.
   final String? credit;
 
+  /// `prov:aiLabel`, the AI disclosure text exactly as the platform or the
+  /// author stated it (SPEC §3.7).
+  ///
+  /// Stored verbatim: it is never translated or reworded, because the exact
+  /// wording is what the platform or author declared.
+  final String? aiLabel;
+
+  /// `prov:aiLabelSource`, one of [aiLabelSourcePlatform],
+  /// [aiLabelSourceAuthor] or [aiLabelSourceUnknown].
+  ///
+  /// Any other value read from a file becomes [aiLabelSourceUnknown]
+  /// (SPEC §3.7).
+  final String? aiLabelSource;
+
+  /// `Iptc4xmpExt:DigitalSourceType`, the IPTC digital source type URI.
+  ///
+  /// Written as [compositeWithTrainedAlgorithmicMedia] when an AI label is
+  /// present, but only when the file has no value of its own: a camera or
+  /// generator that already recorded a source type keeps it (SPEC §3.4, §4.6).
+  final String? digitalSourceType;
+
   /// Other fields of the known namespaces (prov, dc, xmp, photoshop) that this
   /// model has no property for, keyed by qualified name, for example
   /// `photoshop:Headline`.
@@ -218,6 +276,9 @@ class XmpProvenance {
     List<String>? subject,
     int? rating,
     String? credit,
+    String? aiLabel,
+    String? aiLabelSource,
+    String? digitalSourceType,
     Map<String, String>? otherFields,
   }) => XmpProvenance._withLiterals(
     schema: schema ?? this.schema,
@@ -239,6 +300,11 @@ class XmpProvenance {
     subject: subject ?? this.subject,
     rating: rating ?? this.rating,
     credit: credit ?? this.credit,
+    aiLabel: aiLabel ?? this.aiLabel,
+    aiLabelSource: aiLabelSource == null
+        ? this.aiLabelSource
+        : normalizeAiLabelSource(aiLabelSource),
+    digitalSourceType: digitalSourceType ?? this.digitalSourceType,
     otherFields: otherFields ?? this.otherFields,
     // Stale literals are ignored by _formatDate, so they can be carried.
     dateLiterals: _dateLiterals,
@@ -284,6 +350,9 @@ class XmpProvenance {
       if (subject != null) 'subject': subject,
       if (rating != null) 'rating': rating,
       if (credit != null) 'credit': credit,
+      if (aiLabel != null) 'aiLabel': aiLabel,
+      if (aiLabelSource != null) 'aiLabelSource': aiLabelSource,
+      if (digitalSourceType != null) 'digitalSourceType': digitalSourceType,
       ...otherFields,
     };
   }
@@ -310,6 +379,10 @@ class XmpProvenance {
     if (subject != null) 'dc:subject': subject,
     if (rating != null) 'xmp:Rating': rating,
     if (credit != null) 'photoshop:Credit': credit,
+    if (aiLabel != null) 'prov:aiLabel': aiLabel,
+    if (aiLabelSource != null) 'prov:aiLabelSource': aiLabelSource,
+    if (digitalSourceType != null)
+      'Iptc4xmpExt:DigitalSourceType': digitalSourceType,
     ...otherFields,
   };
 
@@ -339,6 +412,9 @@ class XmpProvenance {
     XmpField.subject: subject,
     XmpField.rating: rating,
     XmpField.credit: credit,
+    XmpField.aiLabel: aiLabel,
+    XmpField.aiLabelSource: aiLabelSource,
+    XmpField.digitalSourceType: digitalSourceType,
     XmpField.dcSource: sourceUrl,
   };
 
@@ -396,6 +472,11 @@ class XmpProvenance {
       subject: fields.list(XmpField.subject),
       rating: fields.integer(XmpField.rating),
       credit: fields.string(XmpField.credit),
+      aiLabel: fields.string(XmpField.aiLabel),
+      aiLabelSource: fields.string(XmpField.aiLabelSource) == null
+          ? null
+          : normalizeAiLabelSource(fields.string(XmpField.aiLabelSource)),
+      digitalSourceType: fields.string(XmpField.digitalSourceType),
       otherFields: fields.otherFields,
       dateLiterals: literals,
     );
@@ -490,6 +571,14 @@ class XmpProvenance {
       subject: list('dc:subject', 'subject'),
       rating: _parseInt(pick('xmp:Rating', 'rating')),
       credit: text('photoshop:Credit', 'credit'),
+      aiLabel: text('prov:aiLabel', 'aiLabel'),
+      aiLabelSource: text('prov:aiLabelSource', 'aiLabelSource') == null
+          ? null
+          : normalizeAiLabelSource(text('prov:aiLabelSource', 'aiLabelSource')),
+      digitalSourceType: text(
+        'Iptc4xmpExt:DigitalSourceType',
+        'digitalSourceType',
+      ),
       otherFields: otherFields,
       dateLiterals: literals,
     );
@@ -523,6 +612,9 @@ class XmpProvenance {
     'xmp:Rating',
     'dc:source',
     'photoshop:Credit',
+    'prov:aiLabel',
+    'prov:aiLabelSource',
+    'Iptc4xmpExt:DigitalSourceType',
     // Flat SPEC format keys
     'schema',
     'assetId',
@@ -543,6 +635,9 @@ class XmpProvenance {
     'subject',
     'rating',
     'credit',
+    'aiLabel',
+    'aiLabelSource',
+    'digitalSourceType',
     'source',
   };
 }

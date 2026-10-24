@@ -1,3 +1,65 @@
+## 0.2.2
+
+Implements provenance-spec **0.1.6**, which adds the AI annotation fields.
+
+### Added
+
+- **`writeXmpTextToFile(path, xml)`**: stores an already-edited XMP package.
+  The container is detected from the file header and the existing rules apply
+  unchanged — JPEG / PNG / WebP and MP4 / MOV (rewrite mode) go through a
+  temporary file plus a rename, MP4 / MOV can be appended in place
+  (`mp4WriteMode: Mp4WriteMode.inPlace`), and a `.xmp` path is written as a
+  sidecar. The package is parsed first, so malformed XML throws a
+  `FormatException` and leaves the file untouched; an unsupported container
+  throws `UnsupportedError`. This does **not** apply the write policy of SPEC
+  §4.6 — it stores exactly the package it is given.
+- **Per-format text writers** behind it: `writeJpegXmpText`,
+  `writePngXmpText`, `writeWebpXmpText`, `writeMp4XmpText` (bytes) and
+  `writeJpegXmpTextToFile`, `writePngXmpTextToFile`, `writeWebpXmpTextToFile`,
+  `writeMp4XmpTextToFile`, `appendMp4XmpTextInPlace` (files), plus
+  `isSidecarPath`.
+- **AI annotation fields** (SPEC §3.7): `XmpProvenance` gains `aiLabel`,
+  `aiLabelSource` (`platform` | `author` | `unknown`) and
+  `digitalSourceType`, read and written for JPEG, PNG, WebP and MP4 / MOV, with
+  the JSON names of SPEC §7.
+- `ProvenanceBuilder` gains `aiLabel` and `aiLabelSource`. A provenance with an
+  `aiLabel` implies
+  `Iptc4xmpExt:DigitalSourceType` =
+  `http://cv.iptc.org/newscodes/digitalsourcetype/compositeWithTrainedAlgorithmicMedia`,
+  but an existing `DigitalSourceType` in the file is never overwritten: all
+  three fields are capture fields, so "missing only" applies on both sides of
+  a merge.
+- Exported `aiLabelSourcePlatform`, `aiLabelSourceAuthor`,
+  `aiLabelSourceUnknown`, `normalizeAiLabelSource`,
+  `compositeWithTrainedAlgorithmicMedia` and `iptcExtNsUri`.
+
+### Changed
+
+- **`XmpPackage.setField` removes the whole field when given an empty list.**
+  An editor that cleared every value of a bag used to leave the empty field
+  behind; the field (element and attributes) is now removed.
+- `provenanceSpecVersion` is now `'0.1.6'`.
+- The spec submodule is pinned to `v0.1.6`.
+
+### Behaviour
+
+- `aiLabel` is stored verbatim — never translated, never rewritten.
+- `aiLabelSource` accepts only the three spec values; anything else, including
+  a missing value, is read as `unknown`.
+
+### Tests
+
+- The three new vectors pass against their `expected.json`:
+  `jpeg-ai-label.jpg`, `jpeg-existing-digitalsourcetype.jpg` and
+  `mp4-ai-label.mp4`.
+- Writing a provenance with an `aiLabel` to `jpeg-existing-digitalsourcetype.jpg`
+  keeps that file's `trainedAlgorithmicMedia`, for JPEG and MP4, in both write
+  modes.
+- `writeXmpTextToFile` is covered for JPEG, PNG, WebP, MP4 (rewrite and
+  in-place), MOV and `.xmp` sidecars: the image / media bytes are unchanged,
+  exactly one XMP box ends an MP4, an empty list removes the field, malformed
+  XML throws with the file untouched, an unsupported container throws.
+
 ## 0.2.1
 
 Implements provenance-spec **0.1.5**, which revises the MP4 / MOV truncation

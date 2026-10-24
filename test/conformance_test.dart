@@ -1,4 +1,4 @@
-// Conformance with provenance-spec 0.1.5 (SPEC §10).
+// Conformance with provenance-spec 0.1.6 (SPEC §10).
 //
 // The six requirements of §10:
 //   1. every read case of `test-vectors/` matches its `*.expected.json`;
@@ -112,6 +112,9 @@ void main() {
       'multiblock-elements.jpg': 'jpeg',
       'baidupan-single.jpg': 'jpeg',
       'exif-before-xmp.jpg': 'jpeg',
+      'jpeg-ai-label.jpg': 'jpeg',
+      'jpeg-existing-digitalsourcetype.jpg': 'jpeg',
+      'mp4-ai-label.mp4': 'mp4',
     };
 
     for (final entry in vectors.entries) {
@@ -120,6 +123,7 @@ void main() {
         final record = switch (entry.value) {
           'jpeg' => readJpegXmp(bytes),
           'png' => readPngXmp(bytes),
+          'mp4' => readMp4Xmp(bytes),
           _ => readWebpXmp(bytes),
         };
         expect(record, isNotNull, reason: 'no XMP read from ${entry.key}');
