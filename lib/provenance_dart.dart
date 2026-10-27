@@ -97,7 +97,7 @@ export 'src/provenance_builder.dart'
         maxDescriptionLength,
         truncateDescription;
 export 'src/spec_version.dart' show provenanceSpecVersion;
-export 'src/url_normalizer.dart' show normalizeUrl;
+export 'src/url_normalizer.dart' show extractTiktokPostId, normalizeUrl;
 export 'src/xmp_core.dart'
     show
         buildXmpXml,

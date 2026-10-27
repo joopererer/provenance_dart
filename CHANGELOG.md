@@ -1,3 +1,12 @@
+## 0.2.3
+
+Implements provenance-spec **0.1.7** TikTok URL normalization.
+
+- Normalize supported TikTok video and photo URLs to `/@/video/{id}`.
+- Export `extractTiktokPostId` for reusable numeric post ID extraction.
+- Preserve TikTok short links and unrecognized URLs unchanged; callers expand
+  short links before normalization.
+
 ## 0.2.2
 
 Implements provenance-spec **0.1.6**, which adds the AI annotation fields.

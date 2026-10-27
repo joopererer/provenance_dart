@@ -1,7 +1,7 @@
 # provenance_dart
 
 A pure Dart implementation of
-[provenance-spec](https://github.com/joopererer/provenance-spec) 0.1.6 — read
+[provenance-spec](https://github.com/joopererer/provenance-spec) 0.1.7 — read
 and write provenance metadata (where a file came from, who made it, when it was
 captured) as XMP inside JPEG, PNG, WebP, MP4 and MOV files, and in `.xmp`
 sidecar files.
@@ -43,7 +43,7 @@ Add the dependency:
 
 ```yaml
 dependencies:
-  provenance_dart: ^0.2.2
+  provenance_dart: ^0.2.3
 ```
 
 The spec is a git submodule at `spec/`, pinned to a release tag. The test
@@ -112,6 +112,24 @@ and the description is truncated to 2000 characters. Everything application
 specific — the software name in `prov:capturedBy`, the localized platform name
 in `photoshop:Credit`, and any rule about which author IDs are trustworthy — is
 supplied by the caller.
+
+### TikTok URLs
+
+`normalizeUrl` recognizes `www.tiktok.com`, `tiktok.com` and `m.tiktok.com`.
+The paths `/@username/video/{id}`, `/@username/photo/{id}`, `/v/{id}.html`
+and `/share/video/{id}` become `https://www.tiktok.com/@/video/{id}`;
+photo posts also use `/video/`. All query parameters and fragments are removed.
+`extractTiktokPostId(url)` returns the numeric ID as a string, or `null` when
+it cannot be extracted. Unrecognized TikTok URLs are returned unchanged.
+
+Short links on `vm.tiktok.com` and `vt.tiktok.com` are returned **unchanged**,
+without errors. These pure functions cannot expand them offline; the caller
+must follow redirects and then pass the full URL to the functions.
+
+Platform mappings and display names belong to the caller: use `platform:
+'tiktok'` and `creditPlatformName: 'TikTok'` with `ProvenanceBuilder`. As for
+other platforms, Credit is `authorName / TikTok` when both author and display
+name are supplied, and is omitted otherwise.
 
 ### Byte-level API
 
@@ -313,7 +331,7 @@ written (SPEC §4.6). A source value outside the three spec values is read as
 | Area | Members |
 |---|---|
 | Orchestration | `MetadataService.readProvenance`, `readEmbeddedXmp`, `readSidecarXmpText`, `readEmbedded`, `readSidecar`, `detectFormat`, `hasC2pa`, `embedProvenance`, `writeSidecar`; `EmbedResult`, `EmbedErrorCode` |
-| Spec | `provenanceSpecVersion` (the implemented spec release, currently `0.1.6`) |
+| Spec | `provenanceSpecVersion` (the implemented spec release, currently `0.1.7`) |
 | Model | `XmpProvenance`, `XmpFields` |
 | Building | `ProvenanceBuilder`, `generateAssetId`, `truncateDescription`, `maxDescriptionLength` |
 | XMP core | `parseXmpFields`, `parseXmpXml`, `mergeProvenance`, `mergeProvenanceXml`, `mergeXmpFields`, `buildXmpXml`, `writeProvenanceIntoPackage`, `updateXmpXml` |
@@ -328,7 +346,7 @@ written (SPEC §4.6). A source value outside the three spec values is read as
 | Sidecar | `sidecarPathFor`, `readSidecarFor`, `readSidecarXmp`, `writeSidecarFor`, `writeSidecarXmp` |
 | C2PA | `detectC2pa`, `detectC2paFromFile`, `C2paStatus` |
 | Format | `detectFormat`, `detectFormatFromFile`, `MediaFormat` |
-| URLs | `normalizeUrl` |
+| URLs | `normalizeUrl`, `extractTiktokPostId` |
 | Dates | `formatDateTimeWithTimezone`, `formatDateTimeUtc` |
 | Files | `rewriteFile`, `writeFileAtomically`, `FileRegion`, `FileRewriteException` |
 | XML | `parseXmlTree`, `XmlElementNode`, `XmlAttr`, `XmlTextNode` |
@@ -421,7 +439,7 @@ run inside `Isolate.run` or a worker pool:
 
 ## Scope
 
-Implemented for 0.2.2:
+Implemented for 0.2.3:
 
 - JPEG, PNG, WebP and MP4 / MOV embedded XMP, plus `.xmp` sidecar files.
 - Reading and writing a ready-made package (`writeXmpTextToFile`), for callers

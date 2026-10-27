@@ -166,7 +166,7 @@ void main() {
 
   group('spec version', () {
     test('provenanceSpecVersion names the implemented spec release', () {
-      expect(provenanceSpecVersion, '0.1.6');
+      expect(provenanceSpecVersion, '0.1.7');
     });
   });
 }

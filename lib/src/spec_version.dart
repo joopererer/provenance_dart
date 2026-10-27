@@ -6,4 +6,4 @@
 /// `prov:schema` (which stays `0.1` for the whole 0.1 line). Projects that
 /// record or display which spec revision they were built against can reference
 /// this constant instead of hard-coding the string.
-const String provenanceSpecVersion = '0.1.6';
+const String provenanceSpecVersion = '0.1.7';

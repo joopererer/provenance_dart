@@ -6,7 +6,7 @@
 /// the fragment is dropped, the scheme and host are lowercased, and known
 /// platforms are rewritten to their canonical form.
 ///
-/// Short links (`xhslink.com`, `t.co`, `vm.tiktok.com`) have to be expanded
+/// Short links (`xhslink.com`, `t.co`, `vm.tiktok.com`, `vt.tiktok.com`) have to be expanded
 /// over the network before they can be normalized; this function is pure and
 /// does not do that.
 String normalizeUrl(String url) {
@@ -17,6 +17,14 @@ String normalizeUrl(String url) {
   final host = uri.host.toLowerCase();
 
   switch (host) {
+    case 'www.tiktok.com':
+    case 'tiktok.com':
+    case 'm.tiktok.com':
+      final id = extractTiktokPostId(url);
+      return id == null ? url : 'https://www.tiktok.com/@/video/$id';
+    case 'vm.tiktok.com':
+    case 'vt.tiktok.com':
+      return url;
     case 'www.xiaohongshu.com':
     case 'xiaohongshu.com':
       return _normalizeXiaohongshu(uri) ?? _normalizeGeneric(uri, scheme, host);
@@ -34,6 +42,28 @@ String normalizeUrl(String url) {
       return _normalizeGeneric(uri, scheme, host);
   }
 }
+
+/// Extracts the numeric post ID from a full TikTok video or photo URL.
+///
+/// Returns `null` for short links, other hosts and unrecognized paths.
+/// Short links must first be expanded by the caller.
+String? extractTiktokPostId(String url) {
+  final uri = Uri.tryParse(url);
+  if (uri == null ||
+      !const {
+        'www.tiktok.com',
+        'tiktok.com',
+        'm.tiktok.com',
+      }.contains(uri.host.toLowerCase())) {
+    return null;
+  }
+  final match = _tiktokPostPath.firstMatch(uri.path);
+  return match?.group(1) ?? match?.group(2) ?? match?.group(3);
+}
+
+final _tiktokPostPath = RegExp(
+  r'^/(?:@[^/]*/(?:video|photo)/([0-9]+)|share/video/([0-9]+)|v/([0-9]+)\.html)/?$',
+);
 
 String? _normalizeXiaohongshu(Uri uri) {
   final segments = uri.pathSegments;

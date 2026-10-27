@@ -40,6 +40,101 @@ void main() {
         expect(normalizeUrl(once), once, reason: 'input ${testCase['in']}');
       }
     });
+
+    test('extracts IDs from all TikTok vectors', () {
+      final tiktok = cases.where((c) => c['platform'] == 'tiktok');
+      expect(tiktok, hasLength(5));
+      for (final c in tiktok) {
+        expect(extractTiktokPostId(c['in'] as String), c['id']);
+        expect(extractTiktokPostId(c['out'] as String), c['id']);
+      }
+    });
+  });
+
+  group('tiktok', () {
+    test('hosts, paths, trailing slash, query and fragment', () {
+      for (final host in ['www.TikTok.COM', 'TikTok.com', 'M.TikTok.Com']) {
+        for (final path in [
+          '@user/video/7123456789012345678',
+          '@user/photo/7123456789012345678',
+          '@/video/7123456789012345678',
+          'v/7123456789012345678.html',
+          'share/video/7123456789012345678',
+        ]) {
+          for (final suffix in [
+            '',
+            '/',
+            '?keep=1&utm_source=x#part',
+            '/?x=1#part',
+          ]) {
+            final url = 'https://$host/$path$suffix';
+            expect(extractTiktokPostId(url), '7123456789012345678');
+            expect(
+              normalizeUrl(url),
+              'https://www.tiktok.com/@/video/7123456789012345678',
+            );
+          }
+        }
+      }
+    });
+
+    test('short and unrecognized links are returned verbatim', () {
+      for (final url in [
+        'https://VM.TikTok.com/abc/?utm_source=x#part',
+        'https://vt.tiktok.com/abc?x=1#part',
+        'https://www.TikTok.com/@user?utm_source=x#part',
+        'https://m.tiktok.com/@user/video/abc?x=1#part',
+        'https://tiktok.com/@user/video/123abc',
+        'https://tiktok.com/@user/video/',
+        'https://tiktok.com/@user/video/extra/123',
+        'https://tiktok.com/@user/video/123/extra',
+        'https://tiktok.com/extra/@user/video/123',
+        'https://tiktok.com/share/video/extra/123',
+        'https://tiktok.com/share/video/123/extra',
+        'https://tiktok.com/v/extra/123.html',
+        'https://tiktok.com/v/123.html/extra',
+        'https://tiktok.com/v/123',
+        'https://tiktok.com/@user/video/123.html',
+        'https://tiktok.com/@user/video/%FF',
+      ]) {
+        expect(extractTiktokPostId(url), isNull, reason: url);
+        expect(normalizeUrl(url), url);
+      }
+    });
+
+    test('extractor rejects other hosts and invalid URLs', () {
+      for (final url in [
+        '',
+        'not a url',
+        'https://[invalid',
+        'https://example.com/@user/video/123',
+        'https://www.tiktok.com.example.com/@user/video/123',
+        'https://vm.tiktok.com/@user/video/123',
+      ]) {
+        expect(extractTiktokPostId(url), isNull, reason: url);
+      }
+    });
+
+    test('platform and Credit follow the existing builder contract', () {
+      for (final platform in ['tiktok', 'instagram']) {
+        final displayName = platform == 'tiktok' ? 'TikTok' : 'Instagram';
+        for (final author in [null, 'Author']) {
+          for (final display in [null, displayName]) {
+            final record = ProvenanceBuilder(
+              platform: platform,
+              capturedBy: 'Test/1',
+              authorName: author,
+              creditPlatformName: display,
+            ).build();
+            expect(record.platform, platform);
+            expect(
+              record.credit,
+              author == null || display == null ? null : '$author / $display',
+            );
+          }
+        }
+      }
+    });
   });
 
   group('xiaohongshu', () {
